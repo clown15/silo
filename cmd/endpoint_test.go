@@ -18,6 +18,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/url"
@@ -25,10 +26,34 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/minio/dnscache"
 )
+
+type endpointTestResolver struct {
+	dnscache.DNSResolver
+}
+
+func (r endpointTestResolver) LookupHost(ctx context.Context, host string) ([]string, error) {
+	// These endpoint fixtures test locality and parsing, not public DNS.
+	for i, name := range []string{"example.org", "example.com", "example.net", "example.edu"} {
+		if host == name {
+			return []string{fmt.Sprintf("203.0.113.%d", i+1)}, nil
+		}
+	}
+	return r.DNSResolver.LookupHost(ctx, host)
+}
+
+func useTestEndpointDNS(t *testing.T) {
+	t.Helper()
+	previous := globalDNSCache
+	globalDNSCache = &dnscache.Resolver{Resolver: endpointTestResolver{net.DefaultResolver}}
+	t.Cleanup(func() { globalDNSCache = previous })
+}
 
 func useStaticTestEndpoints(t *testing.T) {
 	t.Helper()
+	useTestEndpointDNS(t)
 	// These fixtures deliberately use localhost, including inside containers.
 	previous := orchestrated
 	orchestrated = false
@@ -36,6 +61,7 @@ func useStaticTestEndpoints(t *testing.T) {
 }
 
 func TestNewEndpoint(t *testing.T) {
+	useTestEndpointDNS(t)
 	u2, _ := url.Parse("https://example.org/path")
 	u4, _ := url.Parse("http://192.168.253.200/path")
 	rootSlashFoo, _ := filepath.Abs("/foo")
