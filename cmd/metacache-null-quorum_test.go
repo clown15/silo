@@ -815,11 +815,22 @@ func scanNullQuorumAbandoned(t *testing.T, z *erasureServerPools, bucket, object
 	disks := z.serverPools[0].sets[0].getDisks()
 	seq := newBgHealSequence()
 	defer seq.cancelCtx()
-	previousState, previousRoutine := globalBackgroundHealState, globalBackgroundHealRoutine
-	globalBackgroundHealState = &allHealState{healSeqMap: map[string]*healSequence{"test": seq}}
+	// Disk monitors may still read the shared state between object-layer tests.
+	// Install the test sequence under its lock without replacing the state.
+	state := globalBackgroundHealState
+	state.Lock()
+	previousSequences := state.healSeqMap
+	state.healSeqMap = map[string]*healSequence{"test": seq}
+	state.Unlock()
+	previousRoutine := globalBackgroundHealRoutine
 	routine := &healRoutine{tasks: make(chan healTask)}
 	globalBackgroundHealRoutine = routine
-	defer func() { globalBackgroundHealState, globalBackgroundHealRoutine = previousState, previousRoutine }()
+	defer func() {
+		globalBackgroundHealRoutine = previousRoutine
+		state.Lock()
+		state.healSeqMap = previousSequences
+		state.Unlock()
+	}()
 	workerDone := make(chan struct{})
 	var healed []string
 	go func() {

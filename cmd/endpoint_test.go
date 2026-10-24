@@ -27,6 +27,14 @@ import (
 	"testing"
 )
 
+func useStaticTestEndpoints(t *testing.T) {
+	t.Helper()
+	// These fixtures deliberately use localhost, including inside containers.
+	previous := orchestrated
+	orchestrated = false
+	t.Cleanup(func() { orchestrated = previous })
+}
+
 func TestNewEndpoint(t *testing.T) {
 	u2, _ := url.Parse("https://example.org/path")
 	u4, _ := url.Parse("http://192.168.253.200/path")
@@ -130,6 +138,7 @@ func TestNewEndpoints(t *testing.T) {
 }
 
 func TestCreateEndpoints(t *testing.T) {
+	useStaticTestEndpoints(t)
 	tempGlobalMinioPort := globalMinioPort
 	defer func() {
 		globalMinioPort = tempGlobalMinioPort
@@ -353,6 +362,7 @@ func TestCreateEndpoints(t *testing.T) {
 // So it means that if you have say localhost:9000 and localhost:9001 as endpointArgs then localhost:9001
 // is considered a remote service from localhost:9000 perspective.
 func TestGetLocalPeer(t *testing.T) {
+	useStaticTestEndpoints(t)
 	tempGlobalMinioPort := globalMinioPort
 	defer func() {
 		globalMinioPort = tempGlobalMinioPort
@@ -393,6 +403,7 @@ func TestGetLocalPeer(t *testing.T) {
 }
 
 func TestGetRemotePeers(t *testing.T) {
+	useStaticTestEndpoints(t)
 	tempGlobalMinioPort := globalMinioPort
 	defer func() {
 		globalMinioPort = tempGlobalMinioPort
