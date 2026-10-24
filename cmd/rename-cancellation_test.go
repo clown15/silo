@@ -234,6 +234,10 @@ func (d gatedRenameDisk) WriteMetadata(ctx context.Context, ov, volume, path str
 	return d.client.WriteMetadata(ctx, ov, volume, path, fi)
 }
 
+func (d gatedRenameDisk) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, force bool, opts DeleteOptions) error {
+	return d.client.DeleteVersion(ctx, volume, path, fi, force, opts)
+}
+
 // Use real disk commits behind the real RPC client. The barrier fixes the
 // order: every commit has started, then cancellation, then remote completion.
 func TestRenameCancellationKeepsLockUntilRollback(t *testing.T) {
@@ -267,6 +271,23 @@ func TestRenameCancellationKeepsLockUntilRollback(t *testing.T) {
 			}
 			copyInfo.metadataOnly = true
 			copyInfo.UserDefined["copy-test"] = "canceled"
+			// Exercise the production rollback handler and wire options as
+			// well as the client. A local DeleteVersion bypasses that boundary.
+			globalLocalDrivesMu.Lock()
+			previousSets, previousMap := globalLocalSetDrives, globalLocalDrivesMap
+			globalLocalSetDrives = nil
+			globalLocalDrivesMap = make(map[string]StorageAPI)
+			for _, pool := range z.serverPools {
+				for _, disk := range pool.getHashedSet(object).getDisks() {
+					globalLocalDrivesMap[disk.Endpoint().String()] = disk
+				}
+			}
+			globalLocalDrivesMu.Unlock()
+			t.Cleanup(func() {
+				globalLocalDrivesMu.Lock()
+				globalLocalSetDrives, globalLocalDrivesMap = previousSets, previousMap
+				globalLocalDrivesMu.Unlock()
+			})
 			tg, err := grid.SetupTestGrid(2)
 			if err != nil {
 				t.Fatal(err)
@@ -285,6 +306,10 @@ func TestRenameCancellationKeepsLockUntilRollback(t *testing.T) {
 				wrapped := append([]StorageAPI(nil), disks...)
 				for i, disk := range disks {
 					route := fmt.Sprintf("/cancel-rollback/%d/%d", pi, i)
+					server := storageRESTServer{endpoint: disk.Endpoint()}
+					if err := storageDeleteVersionRPC.Register(tg.Managers[1], server.DeleteVersionHandler, route); err != nil {
+						t.Fatal(err)
+					}
 					handle := func(p *RenameDataHandlerParams) (*RenameDataResp, *grid.RemoteErr) {
 						entered <- struct{}{}
 						<-release

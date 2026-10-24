@@ -58,9 +58,20 @@ func TestPoolsReadGenerationConflictDoesNotExposeOldValue(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	router := initTestAPIEndPoints(z, []string{"GetObject", "HeadObject"})
-	for broken := range 2 {
-		t.Run(fmt.Sprintf("broken-pool-%d", broken), func(t *testing.T) {
-			object := fmt.Sprintf("conflict-%d", broken)
+	for _, tc := range []struct {
+		pool int
+		mode string
+	}{
+		{0, "split"},
+		{1, "split"},
+		{0, "older-quorum"},
+		{1, "older-quorum"},
+		{0, "newer-quorum"},
+		{1, "newer-quorum"},
+	} {
+		t.Run(fmt.Sprintf("%s/pool-%d", tc.mode, tc.pool), func(t *testing.T) {
+			broken := tc.pool
+			object := fmt.Sprintf("conflict-%s-%d", tc.mode, broken)
 			base := UTCNow().Add(-time.Hour)
 			putConsistencyObject(t, z, bucket, object, 1-broken, "old-acknowledged", ObjectOptions{MTime: base})
 			set := z.serverPools[broken].getHashedSet(object)
@@ -70,7 +81,20 @@ func TestPoolsReadGenerationConflictDoesNotExposeOldValue(t *testing.T) {
 				putConsistencyObject(t, z, bucket, object, broken, fmt.Sprintf("newer-%d", generation),
 					ObjectOptions{MTime: base.Add(time.Duration(generation+1) * time.Minute)})
 				for i, disk := range disks {
-					if i%4 != generation {
+					g := i % 4
+					switch tc.mode {
+					case "older-quorum":
+						g = 0
+						if i >= len(disks)-3 {
+							g = i - (len(disks) - 3) + 1
+						}
+					case "newer-quorum":
+						g = 3
+						if i < 3 {
+							g = i
+						}
+					}
+					if g != generation {
 						continue
 					}
 					buf, err := disk.ReadAll(ctx, bucket, pathJoin(object, xlStorageFormatFile))
@@ -88,8 +112,15 @@ func TestPoolsReadGenerationConflictDoesNotExposeOldValue(t *testing.T) {
 			for _, version := range []string{"", nullVersionID} {
 				for _, method := range []string{http.MethodHead, http.MethodGet} {
 					rec := consistencyRequest(t, router, method, bucket, object, version)
-					if rec.Code != http.StatusServiceUnavailable {
-						t.Errorf("%s version=%q exposed an old value or false absence: status=%d body=%q", method, version, rec.Code, rec.Body.String())
+					want := http.StatusServiceUnavailable
+					if tc.mode == "newer-quorum" {
+						want = http.StatusOK
+					}
+					if rec.Code != want {
+						t.Errorf("%s version=%q: want status=%d, got=%d body=%q", method, version, want, rec.Code, rec.Body.String())
+					}
+					if want == http.StatusOK && method == http.MethodGet && rec.Body.String() != "newer-3" {
+						t.Errorf("latest quorum did not return its payload: %q", rec.Body.String())
 					}
 				}
 			}

@@ -935,6 +935,16 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 		if err != nil {
 			return FileInfo{}, nil, nil, time.Time{}, "", err
 		}
+		for i, meta := range metaArr {
+			if errs[i] == nil && meta.IsValid() && meta.VersionID == fi.VersionID && meta.ModTime.After(fi.ModTime) {
+				// A quorum of an older generation does not resolve a later
+				// overwrite of the same version. Keep the uncertainty visible
+				// instead of silently rolling the object back on reads.
+				return FileInfo{}, nil, nil, time.Time{}, "", InsufficientReadQuorum{
+					Err: errErasureReadQuorum, Type: RQInconsistentMeta,
+				}
+			}
+		}
 
 		onlineMeta := make([]FileInfo, len(metaArr))
 		for i, disk := range onlineDisks {
