@@ -22,8 +22,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
+
+	madmin "github.com/minio/madmin-go/v3"
 )
 
 // All metadata is valid and readable. Only the completed generations differ.
@@ -124,10 +127,20 @@ func TestPoolsReadGenerationConflictDoesNotExposeOldValue(t *testing.T) {
 					}
 				}
 			}
+			if tc.mode != "newer-quorum" {
+				for _, version := range []string{"", nullVersionID} {
+					for _, scan := range []madmin.HealScanMode{madmin.HealNormalScan, madmin.HealDeepScan} {
+						_, err := set.HealObject(ctx, bucket, object, version, madmin.HealOpts{ScanMode: scan, Remove: true})
+						if !isErrReadQuorum(err) {
+							t.Errorf("heal version=%q scan=%v: want read-quorum error, got %v", version, scan, err)
+						}
+					}
+				}
+			}
 			for i, disk := range disks {
 				buf, err := disk.ReadAll(ctx, bucket, pathJoin(object, xlStorageFormatFile))
 				if err != nil || !bytes.Equal(buf, saved[i]) {
-					t.Errorf("read destroyed conflicting generation on disk %d: %v", i, err)
+					t.Errorf("read or heal destroyed conflicting generation on disk %d: %v", i, err)
 				}
 			}
 		})
@@ -150,6 +163,97 @@ func TestPoolsReadUnavailablePoolDoesNotExposeOldValue(t *testing.T) {
 			switchDisks(faulty)
 			if _, err := z.GetObjectInfo(t.Context(), bucket, object, ObjectOptions{}); err == nil || isErrObjectNotFound(err) {
 				t.Errorf("unknown pool state allowed an old value: %v", err)
+			}
+		})
+	}
+}
+
+type generationReadGateDisk struct {
+	StorageAPI
+	ready   chan<- struct{}
+	release <-chan struct{}
+}
+
+func (d generationReadGateDisk) ReadXL(ctx context.Context, volume, path string, data bool) (RawFileInfo, error) {
+	fi, err := d.StorageAPI.ReadXL(ctx, volume, path, data)
+	d.ready <- struct{}{}
+	if d.release != nil {
+		<-d.release
+	}
+	return fi, err
+}
+
+func (d generationReadGateDisk) ReadVersion(ctx context.Context, orig, volume, path, version string, opts ReadOptions) (FileInfo, error) {
+	fi, err := d.StorageAPI.ReadVersion(ctx, orig, volume, path, version, opts)
+	d.ready <- struct{}{}
+	if d.release != nil {
+		<-d.release
+	}
+	return fi, err
+}
+
+func TestReadGenerationFastInfoWaitsForSlowDisk(t *testing.T) {
+	for _, version := range []string{"", nullVersionID} {
+		t.Run("version="+version, func(t *testing.T) {
+			z, bucket := consistencyPools(t)
+			const object = "slow-newer-generation"
+			set := z.serverPools[0].getHashedSet(object)
+			disks, switchDisks := installListingDiskSwitch(set)
+			defer switchDisks(disks)
+			base := UTCNow().Add(-time.Hour)
+			putConsistencyObject(t, z, bucket, object, 0, "old", ObjectOptions{MTime: base})
+			saved := make([][]byte, len(disks)-1)
+			for i := range saved {
+				saved[i] = mustReadNullQuorumMeta(t, disks[i], bucket, object)
+			}
+			putConsistencyObject(t, z, bucket, object, 0, "new", ObjectOptions{MTime: base.Add(time.Minute)})
+			for i, meta := range saved {
+				if err := disks[i].WriteAll(t.Context(), bucket, pathJoin(object, xlStorageFormatFile), meta); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ready, release := make(chan struct{}, len(disks)), make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			wrapped := append([]StorageAPI(nil), disks...)
+			for i, disk := range disks {
+				gate := generationReadGateDisk{StorageAPI: disk, ready: ready}
+				if i == len(disks)-1 {
+					gate.release = release
+				}
+				wrapped[i] = gate
+			}
+			switchDisks(wrapped)
+			done := make(chan error, 1)
+			go func() {
+				_, _, _, err := set.getObjectFileInfo(t.Context(), bucket, object, ObjectOptions{FastGetObjInfo: true, VersionID: version}, false)
+				done <- err
+			}()
+			for range disks {
+				select {
+				case <-ready:
+				case <-time.After(5 * time.Second):
+					t.Fatal("metadata reads did not reach the barrier")
+				}
+			}
+			early := false
+			select {
+			case err := <-done:
+				early = true
+				t.Errorf("fast read returned before the newer disk: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			unblock()
+			if !early {
+				select {
+				case err := <-done:
+					if !isErrReadQuorum(err) {
+						t.Fatalf("fast read exposed the old generation: %v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("fast read did not finish after the newer disk")
+				}
 			}
 		})
 	}
