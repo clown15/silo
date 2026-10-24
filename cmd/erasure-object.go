@@ -1562,6 +1562,18 @@ func (er erasureObjects) putObject(ctx context.Context, bucket string, object st
 		compIndex = opts.IndexCB()
 	}
 
+	if !opts.NoLock {
+		lk := er.NewNSLock(bucket, object)
+		lkctx, err := lk.GetLock(ctx, globalOperationTimeout)
+		if err != nil {
+			return ObjectInfo{}, err
+		}
+		ctx = lkctx.Context()
+		defer lk.Unlock(lkctx)
+	}
+
+	// Mint the generation while holding the commit lock. Staged uploads may
+	// acquire the lock in a different order from their encoding completion.
 	modTime := opts.MTime
 	if opts.MTime.IsZero() {
 		modTime = UTCNow()
@@ -1656,16 +1668,6 @@ func (er erasureObjects) putObject(ctx context.Context, bucket string, object st
 		if opts.DataMovement {
 			partsMetadata[index].SetDataMov()
 		}
-	}
-
-	if !opts.NoLock {
-		lk := er.NewNSLock(bucket, object)
-		lkctx, err := lk.GetLock(ctx, globalOperationTimeout)
-		if err != nil {
-			return ObjectInfo{}, err
-		}
-		ctx = lkctx.Context()
-		defer lk.Unlock(lkctx)
 	}
 
 	if !opts.ReplicationRequest && !opts.ReplicaLockReconcile && !opts.DataMovement &&
