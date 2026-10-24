@@ -59,6 +59,16 @@ type Response struct {
 	Err error
 }
 
+type withoutDefaultTimeoutKey struct{}
+
+// WithoutDefaultTimeout disables the implicit single-request timeout.
+// Explicit context cancellation and connection loss still end the request.
+// Use this for admitted mutations that must return their actual result before
+// the caller releases its lock.
+func WithoutDefaultTimeout(ctx context.Context) context.Context {
+	return context.WithValue(ctx, withoutDefaultTimeoutKey{}, true)
+}
+
 func newMuxClient(ctx context.Context, muxID uint64, parent *Connection) *muxClient {
 	ctx, cancelFn := context.WithCancelCause(ctx)
 	return &muxClient{
@@ -101,8 +111,10 @@ func (m *muxClient) roundtrip(h HandlerID, req []byte) ([]byte, error) {
 	m.respMu.Unlock()
 	ctx := m.ctx
 
-	// Add deadline if none.
-	if msg.DeadlineMS == 0 {
+	// Admitted storage mutations must not time out while the handler can
+	// still commit. A zero wire deadline also keeps their late response.
+	noDefaultTimeout, _ := ctx.Value(withoutDefaultTimeoutKey{}).(bool)
+	if msg.DeadlineMS == 0 && !noDefaultTimeout {
 		msg.DeadlineMS = uint32(defaultSingleRequestTimeout / time.Millisecond)
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, defaultSingleRequestTimeout)

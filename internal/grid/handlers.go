@@ -550,7 +550,8 @@ type Requester interface {
 
 // Call the remote with the request and return the response.
 // The response should be returned with PutResponse when no error.
-// If no deadline is set, a 1-minute deadline is added.
+// If no deadline is set, a 1-minute deadline is added unless
+// WithoutDefaultTimeout was requested.
 func (h *SingleHandler[Req, Resp]) Call(ctx context.Context, c Requester, req Req) (resp Resp, err error) {
 	if c == nil {
 		if h.ignoreNilConn {

@@ -344,7 +344,8 @@ func (c *Subroute) newMuxClient(ctx context.Context) (*muxClient, error) {
 
 // Request allows to do a single remote request.
 // 'req' will not be used after the call and caller can reuse.
-// If no deadline is set on ctx, a 1-minute deadline will be added.
+// If no deadline is set on ctx, a 1-minute deadline will be added unless
+// WithoutDefaultTimeout was requested.
 func (c *Connection) Request(ctx context.Context, h HandlerID, req []byte) ([]byte, error) {
 	if !h.valid() {
 		return nil, ErrUnknownHandler
@@ -370,7 +371,8 @@ func (c *Connection) Request(ctx context.Context, h HandlerID, req []byte) ([]by
 
 // Request allows to do a single remote request.
 // 'req' will not be used after the call and caller can reuse.
-// If no deadline is set on ctx, a 1-minute deadline will be added.
+// If no deadline is set on ctx, a 1-minute deadline will be added unless
+// WithoutDefaultTimeout was requested.
 func (c *Subroute) Request(ctx context.Context, h HandlerID, req []byte) ([]byte, error) {
 	if !h.valid() {
 		return nil, ErrUnknownHandler

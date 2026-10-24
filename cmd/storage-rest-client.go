@@ -412,7 +412,7 @@ func (client *storageRESTClient) WriteMetadata(ctx context.Context, origvolume, 
 		return err
 	}
 	// As with RenameData, admitted metadata writes must finish before unlock.
-	ctx = context.WithoutCancel(ctx)
+	ctx = grid.WithoutDefaultTimeout(context.WithoutCancel(ctx))
 
 	_, err := storageWriteMetadataRPC.Call(ctx, client.gridConn, &MetadataHandlerParams{
 		DiskID:     *client.diskID.Load(),
@@ -428,7 +428,7 @@ func (client *storageRESTClient) UpdateMetadata(ctx context.Context, volume, pat
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	ctx = context.WithoutCancel(ctx)
+	ctx = grid.WithoutDefaultTimeout(context.WithoutCancel(ctx))
 
 	_, err := storageUpdateMetadataRPC.Call(ctx, client.gridConn, &MetadataHandlerParams{
 		DiskID:     *client.diskID.Load(),
@@ -443,7 +443,7 @@ func (client *storageRESTClient) UpdateMetadata(ctx context.Context, volume, pat
 func (client *storageRESTClient) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool, opts DeleteOptions) (err error) {
 	if opts.UndoWrite {
 		// Rollback is part of the commit and must finish before unlocking.
-		ctx = context.WithoutCancel(ctx)
+		ctx = grid.WithoutDefaultTimeout(context.WithoutCancel(ctx))
 	} else {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, globalDriveConfig.GetMaxTimeout())
@@ -504,7 +504,7 @@ func (client *storageRESTClient) RenameData(ctx context.Context, srcVolume, srcP
 	// The remote handler cannot cancel an admitted RenameData. Keep waiting
 	// for its result so renameData can roll back every completed mutation
 	// before the caller cleans staging files and releases the namespace lock.
-	ctx = context.WithoutCancel(ctx)
+	ctx = grid.WithoutDefaultTimeout(context.WithoutCancel(ctx))
 	params := RenameDataHandlerParams{
 		DiskID:    *client.diskID.Load(),
 		SrcVolume: srcVolume,
