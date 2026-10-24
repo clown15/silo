@@ -80,6 +80,7 @@ func TestPoolsReadGenerationConflictDoesNotExposeOldValue(t *testing.T) {
 			set := z.serverPools[broken].getHashedSet(object)
 			disks := set.getDisks()
 			saved := make([][]byte, len(disks))
+			savedParts := make([]map[string][]byte, len(disks))
 			for generation := range 4 {
 				putConsistencyObject(t, z, bucket, object, broken, fmt.Sprintf("newer-%d", generation),
 					ObjectOptions{MTime: base.Add(time.Duration(generation+1) * time.Minute)})
@@ -105,9 +106,15 @@ func TestPoolsReadGenerationConflictDoesNotExposeOldValue(t *testing.T) {
 						t.Fatal(err)
 					}
 					saved[i] = bytes.Clone(buf)
+					savedParts[i] = readGenerationParts(t, disk, bucket, object, buf)
 				}
 			}
 			for i, disk := range disks {
+				for path, data := range savedParts[i] {
+					if err := disk.WriteAll(ctx, bucket, path, data); err != nil {
+						t.Fatal(err)
+					}
+				}
 				if err := disk.WriteAll(ctx, bucket, pathJoin(object, xlStorageFormatFile), saved[i]); err != nil {
 					t.Fatal(err)
 				}
@@ -142,9 +149,40 @@ func TestPoolsReadGenerationConflictDoesNotExposeOldValue(t *testing.T) {
 				if err != nil || !bytes.Equal(buf, saved[i]) {
 					t.Errorf("read or heal destroyed conflicting generation on disk %d: %v", i, err)
 				}
+				if tc.mode != "newer-quorum" {
+					for path, data := range savedParts[i] {
+						got, err := disk.ReadAll(ctx, bucket, path)
+						if err != nil || !bytes.Equal(got, data) {
+							t.Errorf("read or heal destroyed generation shard on disk %d: %s: %v", i, path, err)
+						}
+					}
+				}
 			}
 		})
 	}
+}
+
+func readGenerationParts(t *testing.T, disk StorageAPI, bucket, object string, metadata []byte) map[string][]byte {
+	t.Helper()
+	fi, err := fileInfoFromRaw(RawFileInfo{Buf: metadata}, bucket, object, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := make(map[string][]byte)
+	if fi.InlineData() || fi.Size == 0 {
+		return parts
+	}
+	// Later PUTs remove the previous data directory. Save its real bitrot
+	// shards too, so restoring metadata never fabricates missing-part damage.
+	for _, part := range fi.Parts {
+		path := pathJoin(object, fi.DataDir, fmt.Sprintf("part.%d", part.Number))
+		data, err := disk.ReadAll(t.Context(), bucket, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts[path] = data
+	}
+	return parts
 }
 
 func TestPoolsReadUnavailablePoolDoesNotExposeOldValue(t *testing.T) {
