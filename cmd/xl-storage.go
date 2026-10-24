@@ -2840,6 +2840,12 @@ func (s *xlStorage) RenameData(ctx context.Context, srcVolume, srcPath string, f
 				xlMeta.data.remove(reqVID, dataDir)
 			}
 		}
+		if !healing && res.OldDataDir == "" {
+			// Shared data must survive both commit and rollback. Keep the
+			// previous metadata in a separate transaction directory instead
+			// of using a data directory still owned by another version.
+			res.OldDataDir = fi.DataDir + "-rollback"
+		}
 	}
 
 	if err = xlMeta.AddVersion(fi); err != nil {

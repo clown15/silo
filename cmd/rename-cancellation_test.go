@@ -245,25 +245,42 @@ func TestRenameCancellationKeepsLockUntilRollback(t *testing.T) {
 		size      int
 		versioned bool
 		copy      bool
+		shared    bool
 	}{
-		{32, false, false},
-		{2 << 20, false, false},
-		{32, true, false},
-		{2 << 20, true, false},
-		{32, false, true},
-		{2 << 20, false, true},
+		{32, false, false, false},
+		{2 << 20, false, false, false},
+		{32, true, false, false},
+		{2 << 20, true, false, false},
+		{32, false, true, false},
+		{2 << 20, false, true, false},
+		{32, false, false, true},
+		{2 << 20, false, false, true},
 	} {
-		t.Run(fmt.Sprintf("bytes-%d/other-versions-%t/copy-%t", tc.size, tc.versioned, tc.copy), func(t *testing.T) {
+		t.Run(fmt.Sprintf("bytes-%d/other-versions-%t/copy-%t/shared-%t", tc.size, tc.versioned, tc.copy, tc.shared), func(t *testing.T) {
 			size := tc.size
 			z, bucket := consistencyPools(t)
 			object := "cancel-rollback"
 			old := strings.Repeat("a", size)
 			base := UTCNow().Add(-time.Hour)
+			var sharedVersions [2]string
 			for pool := range 2 {
 				if tc.versioned {
 					putConsistencyObject(t, z, bucket, object, pool, "retained-version", ObjectOptions{Versioned: true, MTime: base.Add(-time.Minute)})
 				}
 				putConsistencyObject(t, z, bucket, object, pool, old, ObjectOptions{MTime: base})
+				if tc.shared {
+					info, err := z.serverPools[pool].GetObjectInfo(t.Context(), bucket, object, ObjectOptions{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					info.metadataOnly, info.versionOnly = true, true
+					copied, err := z.serverPools[pool].getHashedSet(object).CopyObject(t.Context(), bucket, object, bucket, object, info,
+						ObjectOptions{}, ObjectOptions{Versioned: true, MTime: base.Add(time.Minute)})
+					if err != nil {
+						t.Fatal(err)
+					}
+					sharedVersions[pool] = copied.VersionID
+				}
 			}
 			copyInfo, err := z.GetObjectInfo(t.Context(), bucket, object, ObjectOptions{})
 			if err != nil {
@@ -411,14 +428,16 @@ func TestRenameCancellationKeepsLockUntilRollback(t *testing.T) {
 				t.Fatal("returned without accounting for every remote commit")
 			}
 			for pi, pool := range z.serverPools {
-				r, err := pool.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{})
-				if err != nil {
-					t.Fatalf("pool %d lost its acknowledged copy: %v", pi, err)
-				}
-				body, err := io.ReadAll(r)
-				r.Close()
-				if err != nil || string(body) != old {
-					t.Errorf("pool %d rollback lost acknowledged payload: bytes=%d err=%v", pi, len(body), err)
+				for _, version := range []string{"", nullVersionID} {
+					r, err := pool.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{VersionID: version})
+					if err != nil {
+						t.Fatalf("pool %d lost its acknowledged copy (version %q): %v", pi, version, err)
+					}
+					body, err := io.ReadAll(r)
+					r.Close()
+					if err != nil || string(body) != old {
+						t.Errorf("pool %d rollback lost acknowledged payload (version %q): bytes=%d err=%v", pi, version, len(body), err)
+					}
 				}
 			}
 			got, err := z.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{})
@@ -442,6 +461,19 @@ func TestRenameCancellationKeepsLockUntilRollback(t *testing.T) {
 			got.Close()
 			if err != nil || !bytes.Equal(body, newBody) {
 				t.Fatalf("late commit replaced subsequent successful PUT: bytes=%d err=%v", len(body), err)
+			}
+			if tc.shared {
+				for pi, pool := range z.serverPools {
+					r, err := pool.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{VersionID: sharedVersions[pi]})
+					if err != nil {
+						t.Fatal(err)
+					}
+					body, err := io.ReadAll(r)
+					r.Close()
+					if err != nil || string(body) != old {
+						t.Errorf("commit cleanup destroyed shared version on pool %d: bytes=%d err=%v", pi, len(body), err)
+					}
+				}
 			}
 		})
 	}
