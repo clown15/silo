@@ -126,6 +126,9 @@ func (er erasureObjects) CopyObject(ctx context.Context, srcBucket, srcObject, d
 	if err != nil {
 		return oi, toObjectErr(err, srcBucket, srcObject)
 	}
+	if err := checkObjectGenerationQuorum(fi, metaArr, errs); err != nil {
+		return oi, toObjectErr(err, srcBucket, srcObject)
+	}
 	if fi.Deleted {
 		if srcOpts.VersionID == "" {
 			return oi, toObjectErr(errFileNotFound, srcBucket, srcObject)

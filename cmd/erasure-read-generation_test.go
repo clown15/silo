@@ -136,6 +136,12 @@ func TestPoolsReadGenerationConflictDoesNotExposeOldValue(t *testing.T) {
 			}
 			if tc.mode != "newer-quorum" {
 				for _, version := range []string{"", nullVersionID} {
+					_, err := set.CopyObject(ctx, bucket, object, bucket, object,
+						ObjectInfo{metadataOnly: true, UserDefined: map[string]string{"copy-test": "conflicting-source"}},
+						ObjectOptions{VersionID: version}, ObjectOptions{})
+					if !isErrReadQuorum(err) {
+						t.Errorf("COPY-to-self version=%q: want read-quorum error, got %v", version, err)
+					}
 					for _, scan := range []madmin.HealScanMode{madmin.HealNormalScan, madmin.HealDeepScan} {
 						_, err := set.HealObject(ctx, bucket, object, version, madmin.HealOpts{ScanMode: scan, Remove: true})
 						if !isErrReadQuorum(err) {
