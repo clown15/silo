@@ -25,8 +25,61 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
+
+func TestWithDeadlineAndWait(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		name := "cancel"
+		if deadline {
+			name = "deadline"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				entered, release := make(chan struct{}), make(chan struct{})
+				done := make(chan ioret[int], 1)
+				go func() {
+					v, err := WithDeadlineAndWait(ctx, time.Second, func(context.Context) (int, error) {
+						close(entered)
+						<-release
+						return 42, nil
+					})
+					done <- ioret[int]{v, err}
+				}()
+				<-entered
+				if deadline {
+					time.Sleep(2 * time.Second)
+				} else {
+					cancel()
+				}
+				synctest.Wait()
+				select {
+				case r := <-done:
+					t.Fatalf("returned before mutation completed: %+v", r)
+				default:
+				}
+				close(release)
+				synctest.Wait()
+				r := <-done
+				if r.err != nil || r.val != 42 {
+					t.Fatalf("lost actual commit result: %+v", r)
+				}
+			})
+		})
+	}
+}
+
+func TestWithDeadlineAndWaitPanic(t *testing.T) {
+	_, err := WithDeadlineAndWait(t.Context(), time.Second, func(context.Context) (int, error) {
+		panic("mutation failure")
+	})
+	if err == nil || !strings.Contains(err.Error(), "mutation failure") {
+		t.Fatalf("worker panic was not returned: %v", err)
+	}
+}
 
 type sleepWriter struct {
 	timeout time.Duration

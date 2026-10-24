@@ -1048,6 +1048,17 @@ func (z *erasureServerPools) getLatestObjectInfoWithIdx(ctx context.Context, buc
 	}
 	wg.Wait()
 
+	// An unreadable pool may contain a newer generation. Check every pool
+	// before choosing a readable copy; sorting first would hide errors behind
+	// an older object's nonzero ModTime. Delete markers are resolved metadata
+	// and still participate in the ordering below.
+	for _, res := range results {
+		if res.err != nil && !isErrObjectNotFound(res.err) && !isErrVersionNotFound(res.err) &&
+			(!res.oi.DeleteMarker || !isErrMethodNotAllowed(res.err)) {
+			return res.oi, res.zIdx, res.err
+		}
+	}
+
 	// Sort the objInfos such that we always serve latest
 	// this is a defensive change to handle any duplicate
 	// content that may have been created, we always serve

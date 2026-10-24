@@ -659,6 +659,17 @@ func pickLatestQuorumFilesInfo(ctx context.Context, rawFileInfos []RawFileInfo, 
 		for i := range errs {
 			if errs[i] == nil {
 				errs[i] = err
+				// An empty quorum merge does not prove absence when this
+				// disk contains a readable object generation. Preserve that
+				// uncertainty instead of hiding it behind FileNotFound.
+				if errors.Is(err, errFileNotFound) && metadataArray[i] != nil {
+					for _, ver := range metadataArray[i].versions {
+						if inclFreeVers || !ver.header.FreeVersion() {
+							errs[i] = errErasureReadQuorum
+							break
+						}
+					}
+				}
 			}
 		}
 		return metaFileInfos, errs
@@ -998,16 +1009,6 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 				} else {
 					err = errFileNotFound
 				}
-			}
-		}
-		// when we have insufficient read quorum and inconsistent metadata return
-		// file not found, since we can't possibly have a way to recover this object
-		// anyway.
-		if v, ok := err.(InsufficientReadQuorum); ok && v.Type == RQInconsistentMeta {
-			if opts.VersionID != "" {
-				err = errFileVersionNotFound
-			} else {
-				err = errFileNotFound
 			}
 		}
 		return fi, nil, nil, toObjectErr(err, bucket, object)

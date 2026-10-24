@@ -1381,6 +1381,22 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 		return err
 	}
 
+	if opts.UndoWrite {
+		versionID := fi.VersionID
+		if versionID == "" {
+			versionID = nullVersionID
+		}
+		current, err := xlMeta.ToFileInfo(volume, path, versionID, true, false)
+		if err != nil {
+			return err
+		}
+		// A rollback only owns the generation it committed. A delayed undo
+		// must never delete a subsequent write to the same null/version ID.
+		if current.DataDir != fi.DataDir || !current.ModTime.Equal(fi.ModTime) {
+			return errFileVersionNotFound
+		}
+	}
+
 	dataDir, err := xlMeta.DeleteVersion(fi)
 	if err != nil {
 		return err
@@ -1410,6 +1426,12 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 		}
 	}
 
+	// Restore the complete prior metadata even if other versions remain.
+	// Deleting just the failed version would lose the null version it replaced.
+	if opts.UndoWrite && opts.OldDataDir != "" {
+		return renameAll(pathJoin(filePath, opts.OldDataDir, xlStorageFormatFileBackup), pathJoin(filePath, xlStorageFormatFile), filePath)
+	}
+
 	if len(xlMeta.versions) != 0 {
 		// xl.meta must still exist for other versions, dataDir is purged.
 		buf, err = xlMeta.AppendTo(metaDataPoolGet())
@@ -1419,10 +1441,6 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 		}
 
 		return s.writeAllMeta(ctx, volume, pathJoin(path, xlStorageFormatFile), buf, true)
-	}
-
-	if opts.UndoWrite && opts.OldDataDir != "" {
-		return renameAll(pathJoin(filePath, opts.OldDataDir, xlStorageFormatFileBackup), pathJoin(filePath, xlStorageFormatFile), filePath)
 	}
 
 	return s.deleteFile(volumeDir, pathJoin(volumeDir, path, xlStorageFormatFile), true, false)
