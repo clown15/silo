@@ -8,7 +8,8 @@
   Thanks to [@910patin](https://github.com/910patin) for the original fix and
   reproduction in [#250](https://github.com/pgsty/silo/pull/250).
 - Build the server and standalone debugging tools with Go 1.27.3 and refresh
-  Go dependencies. Keep the published Console, mcli and silo-pkg references.
+  Go dependencies, including silo-pkg v3.15.0. Keep the published Console
+  and mcli references.
 - Preserve Kafka's default broker protocol 2.1 and terminal-width behavior;
   fix legacy DARE v1 key unsealing and verify DARE v1/v2 and MinKMS TLS compatibility.
 - Update bundled curl to 8.23.0 and require patched static libraries. Apply

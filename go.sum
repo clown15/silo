@@ -510,8 +510,8 @@ github.com/pgsty/mc v0.0.0-20261017101407-fa3b8bf72458 h1:f3kbkjtjj6D7PXmsIeKrv8
 github.com/pgsty/mc v0.0.0-20261017101407-fa3b8bf72458/go.mod h1:n8NDi0J3hPUGCIM9tOxlhYXkYS9xiTVIxlxa3Rwx1cw=
 github.com/pgsty/silo-console v0.0.0-20261017112417-ef2dd2c41d21 h1:PHxPswGiEwU9MVisu0/Ab7AcNX4IveiX1thQzUXOsM4=
 github.com/pgsty/silo-console v0.0.0-20261017112417-ef2dd2c41d21/go.mod h1:HFNaafu5iCO9bWS86PIyTbgF+yPD4phFt+gxML/1jJU=
-github.com/pgsty/silo-pkg/v3 v3.14.3 h1:hMDxOo36F1whGRkYScrUGGwn98FvsmJ8hVM6pE4i8Bs=
-github.com/pgsty/silo-pkg/v3 v3.14.3/go.mod h1:zqIm3FMETmwPHRKuUExCDGfYkCNXt+vpfBnPM821RdI=
+github.com/pgsty/silo-pkg/v3 v3.15.0 h1:T4Zg7sEzbG9i5Zh/W1qjJhng5SOBztRs7syTAaRVy0g=
+github.com/pgsty/silo-pkg/v3 v3.15.0/go.mod h1:sMDSBNxJGdSZprPGQDbH/KcKrWf1KjNzR8hQurNlyOA=
 github.com/philhofer/fwd v1.2.1 h1:UtpS73q8bFgy/yH3gCq8LSNvj5gv/FowNOiWZa7uKwQ=
 github.com/philhofer/fwd v1.2.1/go.mod h1:RqIHx9QI14HlwKwm98g9Re5prTQ6LdeRQn+gXJFxsJM=
 github.com/pierrec/lz4/v4 v4.1.33 h1:GjG1TJ1V4IzKP8L96muuuDNpTwd7D+l2ccXrjAbe014=
