@@ -115,8 +115,8 @@ func TestListFallbackRejectsSplitGenerations(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, _, err := set.getObjectFileInfo(t.Context(), bucket, object, ObjectOptions{}, false); !isErrObjectNotFound(err) {
-		t.Fatalf("split metadata did not exercise ambiguous not-found: %v", err)
+	if _, _, _, err := set.getObjectFileInfo(t.Context(), bucket, object, ObjectOptions{}, false); !isErrReadQuorum(err) {
+		t.Fatalf("split metadata must remain a read-quorum failure: %v", err)
 	}
 	entries := make(metaCacheEntries, len(disks))
 	for i, disk := range disks {
