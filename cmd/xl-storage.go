@@ -3299,6 +3299,7 @@ func (s *xlStorage) CleanAbandonedData(ctx context.Context, volume string, path 
 	if volume == "" || path == "" {
 		return nil // Ignore
 	}
+	defer s.lockMutations(pathJoin(volume, path))()
 
 	volumeDir, err := s.getVolDir(volume)
 	if err != nil {
@@ -3350,6 +3351,14 @@ func (s *xlStorage) CleanAbandonedData(ctx context.Context, volume string, path 
 	// Do not abort on context errors.
 	for dir := range foundDirs {
 		toRemove := pathJoin(volumeDir, path, dir+SlashSeparator)
+		// A completed disk mutation may still be awaiting its quorum result.
+		// Its previous generation is needed if that transaction must undo.
+		// Only commit/undo cleanup owns a directory containing this backup.
+		if _, err := Lstat(pathJoin(toRemove, xlStorageFormatFileBackup)); err == nil {
+			continue
+		} else if !osIsNotExist(err) {
+			return osErrToFileErr(err)
+		}
 		err = s.deleteFile(volumeDir, toRemove, true, true)
 		diskHealthCheckOK(ctx, err)
 		if err != nil {
