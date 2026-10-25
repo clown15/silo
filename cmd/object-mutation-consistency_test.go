@@ -791,3 +791,39 @@ func TestMutationCrossDiskOrderHasStableRead(t *testing.T) {
 		}
 	}
 }
+
+// Partial no-op updates may revoke undo on only some disks. That internal
+// capability must not split the quorum of otherwise identical object contents.
+func TestMutationPartialNoopPreservesReadability(t *testing.T) {
+	z, bucket := mutationPools(t)
+	const object = "partial-noop"
+	set := z.serverPools[0].getHashedSet(object)
+	const body = "acknowledged-data"
+	const tags = "owner=unchanged"
+	_, err := set.PutObject(t.Context(), bucket, object, mustGetPutObjReader(t, strings.NewReader(body), int64(len(body)), "", ""), ObjectOptions{UserDefined: map[string]string{xhttp.AmzObjectTagging: tags}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disks, swap := installListingDiskSwitch(set)
+	defer swap(disks)
+	partial := append([]StorageAPI(nil), disks...)
+	for i := 4; i < len(partial); i++ {
+		partial[i] = nil
+	}
+	swap(partial)
+	if _, err = set.PutObjectTags(t.Context(), bucket, object, tags, ObjectOptions{}); err == nil {
+		t.Fatal("four drives unexpectedly gave write quorum")
+	}
+	swap(disks)
+	for _, version := range []string{"", nullVersionID} {
+		r, err := set.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{VersionID: version})
+		if err != nil {
+			t.Fatalf("unchanged acknowledged object became unreadable after no-op partial update: %v", err)
+		}
+		got, err := io.ReadAll(r)
+		r.Close()
+		if err != nil || string(got) != body || r.ObjInfo.UserTags != tags {
+			t.Fatalf("body/tags changed: %q %v %+v", got, err, r.ObjInfo)
+		}
+	}
+}
