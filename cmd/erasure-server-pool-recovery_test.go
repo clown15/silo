@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -117,7 +118,7 @@ func (d recoveryReadFaultDisk) RenameData(ctx context.Context, sv, sp string, fi
 }
 
 func TestPoolsRecoveryRefusesUnresolvedPools(t *testing.T) {
-	for _, mode := range []string{"two-inconsistent", "suspended", "rebalancing", "offline", "read-fails-after-commit"} {
+	for _, mode := range []string{"two-inconsistent", "suspended", "rebalancing", "offline", "read-fails-after-commit", "newer-readable-other-copy"} {
 		t.Run(mode, func(t *testing.T) {
 			z, _ := consistencyPools(t)
 			const object = "refused-recovery"
@@ -146,12 +147,17 @@ func TestPoolsRecoveryRefusesUnresolvedPools(t *testing.T) {
 				}
 			}
 			inconsistent(0)
-			putConsistencyObject(t, z, bucket, object, 1, string(old), ObjectOptions{MTime: base.Add(-time.Minute)})
+			otherTime := base.Add(-time.Minute)
+			if mode == "newer-readable-other-copy" {
+				otherTime = base.Add(2 * time.Hour)
+			}
+			putConsistencyObject(t, z, bucket, object, 1, string(old), ObjectOptions{MTime: otherTime})
 			if mode == "two-inconsistent" {
 				inconsistent(1)
 			}
 			// Select a healthy destination if the resolver incorrectly ignores pool0.
-			if mode != "read-fails-after-commit" {
+			postCommitFailure := mode == "read-fails-after-commit" || mode == "newer-readable-other-copy"
+			if !postCommitFailure {
 				restore := conditionalPutPool(t, z, object, 1)
 				defer restore()
 			}
@@ -196,18 +202,30 @@ func TestPoolsRecoveryRefusesUnresolvedPools(t *testing.T) {
 			if result.Code != http.StatusServiceUnavailable {
 				t.Errorf("unresolved recovery returned HTTP=%d: %s", result.Code, result.Body.String())
 			}
-			if mode != "read-fails-after-commit" {
+			if !postCommitFailure {
 				after := snapshot()
 				for i := range before {
 					if before[i] != after[i] {
 						t.Errorf("refused preflight modified shard %d", i)
 					}
 				}
-			} else {
+			} else if mode == "read-fails-after-commit" {
 				fail.Store(false)
 				got := consistencyRequest(t, router, http.MethodGet, bucket, object, "")
 				if got.Code != http.StatusOK || !bytes.Equal(got.Body.Bytes(), replacement) {
 					t.Errorf("read validation failure must not undo committed recovery: HTTP=%d", got.Code)
+				}
+			} else {
+				// A readable but different latest copy cannot confirm recovery.
+				// The committed replacement must still remain in its target pool.
+				r, err := z.serverPools[0].GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err := io.ReadAll(r)
+				r.Close()
+				if err != nil || !bytes.Equal(body, replacement) {
+					t.Fatalf("failed recovery validation must preserve committed data: %v", err)
 				}
 			}
 		})
