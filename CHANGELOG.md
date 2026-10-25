@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## RELEASE.2026-10-25T00-00-00Z
+
+Package version: `20261025000000.0.0`. This source is prepared for a Draft
+Release; public Server artifacts and images remain at 20261018 until promotion.
 
 - Fix LDAP login for long normalized DNs without hiding unreadable IAM
   revocation records. Only length errors for valid keys with an ASCII path
@@ -11,9 +14,10 @@
   Go dependencies, including silo-pkg v3.15.1, the published mcli 20261025
   source and upstream minio-go `ab93db7ba435` for multipart, read/seek and
   batch-delete fixes. Retain output-format and NetBSD compatibility selections.
-- Embed the unreleased Console 2.5.0 candidate `258717be077b`, including its
+- Embed the published Console v2.5.0 source `989fa7150792`, including its
   GUI update, diagnostic WebSocket closing handshake and complete health-report
-  decoding. This selects a source commit, not a new Console release.
+  decoding. Bundle published mcli 20261025 in container builds and select it
+  for the verified client installer and Helm client jobs.
 - Read current bucket inventory in account-info responses so Console refreshes
   immediately reflect successful creation and deletion. This management endpoint
   now performs a live list instead of returning a cached inventory.
@@ -23,9 +27,23 @@
   custom-policy deletion behavior; storage failures retain the previous policy.
 - Preserve Kafka's default broker protocol 2.1 and terminal-width behavior;
   fix legacy DARE v1 key unsealing and verify DARE v1/v2 and MinKMS TLS compatibility.
+- Wait for admitted storage mutations to finish before releasing local guards,
+  deciding rollback or cleaning staging data. Rollback verifies ownership and
+  restores only its overwritten version, preserving later writes and metadata
+  edits. Abandoned-data cleanup retains backups still needed by commit/undo.
+  Generate PUT timestamps under the commit lock. Keep the prior read-quorum
+  and healing policy, including readability after a failed partial overwrite.
 - Update bundled curl to 8.23.0 and require patched static libraries. Apply
   [Red Hat's compromised-CA mitigation](https://access.redhat.com/security/vulnerabilities/RHSB-2026-012);
   the root blocklist also rejects legitimate chains under the affected roots.
+
+Storage limits remain: this does not provide distributed fencing after lease
+loss or network partition, eliminate stale reads after partial metadata writes,
+or repair previously inconsistent objects. Stricter read refusal and additional
+cross-pool recovery remain deferred; their diagnostic tests are retained under
+`consistency_strict`. Waiting for admitted I/O can extend same-object waits on
+a stuck drive, and interrupted cleanup can retain rollback backups. Upgrade all
+writers before relying on the new rollback ownership checks.
 
 These source changes are not included in the published 20261018 artifacts.
 

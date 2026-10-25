@@ -118,6 +118,11 @@ jobs:
           MINIO_API_REQUESTS_MAX: "10000"
         run: go test -race -tags kqueue,dev ./cmd -run '^Test(APIPutObjectRetention|APIVersionAddressedWrite|PutObjectRetention|DirectoryObjectLock|ObjectLockOverwrite|APICopyObjectPreservesVersionAfterSuspension|MultipartNullObjectLock|PoolsObjectLockOverwrite|MultipartVersioningTransitions|PlanReview|RecoveredMultipartUpload)' -count=1 -timeout=5m
 
+      - name: Run maintenance write, rollback and cleanup tests under race detector
+        env:
+          MINIO_API_REQUESTS_MAX: "10000"
+        run: go test -race -tags kqueue,dev ./cmd ./internal/grid ./internal/ioutil -run '^Test(Mutation|RenameCancellation|PutObjectGenerationFollowsCommitLock|MaintenancePartialFailedOverwriteAvailability|SingleMutationWaitsBeyondDefaultTimeout|WithoutDefaultTimeoutStillEndsOnDisconnectOrCancellation|WithDeadlineAndWait)' -count=1 -timeout=5m
+
   crosscompile:
     name: Cross Compile
     runs-on: ubuntu-latest
