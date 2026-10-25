@@ -25,6 +25,18 @@ Release; public Server artifacts and images remain at 20261018 until promotion.
   Peer and etcd notifications reload committed state, so delayed delete events
   preserve subsequent edits. Keep deletion revisions, policy-in-use checks and
   custom-policy deletion behavior; storage failures retain the previous policy.
+- Reload policies without holding the authentication-cache lock, retain IAM
+  write ordering and publish replacements only after a complete successful load.
+  Propagate cancellation through IAM/KMS and SSE-S3 decryption without shortening
+  the caller's policy-query deadline.
+- Preserve authoritative copies when a multi-pool delete or bulk cleanup fails,
+  choose an available pool for a new delete marker, and keep tier data referenced
+  by surviving copies. This does not introduce strict cross-pool read recovery.
+- Preserve remote tier data when lifecycle expiry only adds a delete marker,
+  including non-null versions in suspended buckets. Forward `FULL_OBJECT`
+  checksum type for multipart replicas. Thanks to
+  [@botdeniska](https://github.com/botdeniska) for these lifecycle, replication
+  and multi-pool deletion contributions.
 - Preserve Kafka's default broker protocol 2.1 and terminal-width behavior;
   fix legacy DARE v1 key unsealing and verify DARE v1/v2 and MinKMS TLS compatibility.
 - Wait for admitted storage mutations to finish before releasing local guards,
@@ -36,6 +48,7 @@ Release; public Server artifacts and images remain at 20261018 until promotion.
 - Update bundled curl to 8.23.0 and require patched static libraries. Apply
   [Red Hat's compromised-CA mitigation](https://access.redhat.com/security/vulnerabilities/RHSB-2026-012);
   the root blocklist also rejects legitimate chains under the affected roots.
+- Ship Windows platform archives as ZIP; Linux and macOS retain tar.gz.
 
 Storage limits remain: this does not provide distributed fencing after lease
 loss or network partition, eliminate stale reads after partial metadata writes,
