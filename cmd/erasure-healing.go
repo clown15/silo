@@ -373,9 +373,6 @@ func (er *erasureObjects) healObject(ctx context.Context, bucket string, object 
 	if err != nil {
 		return result, err
 	}
-	if err := checkObjectGenerationQuorum(latestMeta, partsMetadata, errs); err != nil {
-		return result, err
-	}
 
 	// No modtime quorum
 	filterDisksByETag := quorumETag != ""

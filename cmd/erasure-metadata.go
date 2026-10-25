@@ -19,6 +19,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,6 +28,8 @@ import (
 	"github.com/minio/minio/internal/amztime"
 	"github.com/minio/minio/internal/bucket/lifecycle"
 	"github.com/minio/minio/internal/bucket/replication"
+	"github.com/minio/minio/internal/crypto"
+	"github.com/minio/minio/internal/hash/sha256"
 	xhttp "github.com/minio/minio/internal/http"
 	"github.com/pgsty/silo-pkg/v3/sync/errgroup"
 )
@@ -316,48 +319,68 @@ func findFileInfoInQuorum(ctx context.Context, metaArr []FileInfo, modTime time.
 	if quorum < 1 {
 		return FileInfo{}, InsufficientReadQuorum{Err: errErasureReadQuorum, Type: RQInsufficientOnlineDrives}
 	}
-	// Group by exact logical state rather than a layout-only hash. There are
-	// at most one erasure set's worth of candidates; healthy objects compare
-	// against a single representative without hashing or a second XL decode.
-	groups := make([]int, len(metaArr))
-	representatives := make([]int, 0, len(metaArr))
-	counts := make([]int, len(metaArr)+1)
+	metaHashes := make([]string, len(metaArr))
+	h := sha256.New()
 	for i, meta := range metaArr {
 		if !meta.IsValid() {
 			continue
 		}
-		etagOnly := modTime.Equal(timeSentinel) && etag != "" && etag == meta.Metadata["etag"]
-		if !meta.ModTime.Equal(modTime) && !etagOnly {
-			continue
-		}
-		group := 0
-		for j, representative := range representatives {
-			if sameFileInfoVersion(metaArr[representative], meta) {
-				group = j + 1
-				break
+		etagOnly := modTime.Equal(timeSentinel) && (etag != "" && etag == meta.Metadata["etag"])
+		mtimeValid := meta.ModTime.Equal(modTime)
+		if mtimeValid || etagOnly {
+			fmt.Fprintf(h, "%v", meta.XLV1)
+			for _, part := range meta.Parts {
+				fmt.Fprintf(h, "part.%d", part.Number)
+				fmt.Fprintf(h, "part.%d", part.Size)
 			}
+			// Previously we checked if we had quorum on DataDir value.
+			// We have removed this check to allow reading objects with different DataDir
+			// values in a few drives (due to a rebalance-stop race bug)
+			// provided their their etags or ModTimes match.
+
+			if !meta.Deleted && meta.Size != 0 {
+				fmt.Fprintf(h, "%v+%v", meta.Erasure.DataBlocks, meta.Erasure.ParityBlocks)
+				fmt.Fprintf(h, "%v", meta.Erasure.Distribution)
+			}
+
+			if meta.IsRemote() {
+				// ILM transition fields
+				fmt.Fprint(h, meta.TransitionStatus)
+				fmt.Fprint(h, meta.TransitionTier)
+				fmt.Fprint(h, meta.TransitionedObjName)
+				fmt.Fprint(h, meta.TransitionVersionID)
+			}
+
+			// If metadata says encrypted, ask for it in quorum.
+			if etyp, ok := crypto.IsEncrypted(meta.Metadata); ok {
+				fmt.Fprint(h, etyp)
+			}
+
+			// If compressed, look for compressed FileInfo only
+			if meta.IsCompressed() {
+				fmt.Fprint(h, meta.Metadata[ReservedMetadataPrefix+"compression"])
+			}
+
+			metaHashes[i] = hex.EncodeToString(h.Sum(nil))
+			h.Reset()
 		}
-		if group == 0 {
-			representatives = append(representatives, i)
-			group = len(representatives)
-		}
-		groups[i] = group
-		counts[group]++
 	}
-	maxGroup, maxCount := 0, 0
-	tied := false
-	for group, count := range counts {
-		if group == 0 {
+
+	metaHashCountMap := make(map[string]int)
+	for _, hash := range metaHashes {
+		if hash == "" {
 			continue
 		}
-		if count > maxCount {
-			maxGroup, maxCount, tied = group, count, false
-		} else if count == maxCount {
-			tied = true
-		}
+		metaHashCountMap[hash]++
 	}
-	if tied {
-		return FileInfo{}, InsufficientReadQuorum{Err: errErasureReadQuorum, Type: RQInconsistentMeta}
+
+	maxHash := ""
+	maxCount := 0
+	for hash, count := range metaHashCountMap {
+		if count > maxCount {
+			maxCount = count
+			maxHash = hash
+		}
 	}
 
 	if maxCount < quorum {
@@ -374,8 +397,8 @@ func findFileInfoInQuorum(ctx context.Context, metaArr []FileInfo, modTime time.
 	otherPropsMap := make(counterMap[objProps])
 	var candidate FileInfo
 	var found bool
-	for i, group := range groups {
-		if group == maxGroup {
+	for i, hash := range metaHashes {
+		if hash == maxHash {
 			if metaArr[i].IsValid() {
 				if !found {
 					candidate = metaArr[i]

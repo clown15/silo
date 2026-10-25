@@ -53,6 +53,16 @@ Before opening a pull request:
 - Explain any preserved `MINIO_*`, `minio_*`, `x-minio-*`, `/minio/*`,
   `.minio.sys`, ARN, module/import-path, or serialized compatibility name.
 
+The maintenance branch retains the existing read-quorum and healing policy.
+Deferred strict-read and cross-pool recovery tests are preserved behind the
+`consistency_strict` build tag. Run them explicitly with
+`go test -tags kqueue,dev,consistency_strict ./cmd`; known failures must be
+reported separately, not described as fixed or included in a passing result.
+They cover late commits after lease loss, stale metadata reads, and stricter
+read refusal. The normal suite covers the retained write/undo/cleanup fixes
+and continued readability after a failed partial overwrite. This scope does
+not provide distributed fencing or repair previously inconsistent objects.
+
 ### Commit changes
 
 After verification, commit your changes with a concise message and a DCO

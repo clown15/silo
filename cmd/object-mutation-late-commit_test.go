@@ -1,3 +1,8 @@
+//go:build consistency_strict
+
+// Preserved diagnostic for the deferred strict-read policy. This is not a
+// maintenance release gate; failures record intentionally unresolved risks.
+
 // Copyright (c) 2026 Feng Ruohang
 //
 // This file is part of Silo Object Storage.

@@ -185,7 +185,7 @@ func listObjectModtimes(partsMetadata []FileInfo, errs []error) (modTimes []time
 
 func filterOnlineDisksInplace(fi FileInfo, partsMetadata []FileInfo, onlineDisks []StorageAPI) {
 	for i, meta := range partsMetadata {
-		if sameFileInfoVersion(fi, meta) {
+		if fi.XLV1 == meta.XLV1 {
 			continue
 		}
 		onlineDisks[i] = nil

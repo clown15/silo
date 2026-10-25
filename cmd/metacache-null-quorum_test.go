@@ -701,13 +701,9 @@ func TestSingleNullQuorumReadAndConsumers(t *testing.T) {
 		}
 	}
 	put(newBody, oldTime.Add(time.Minute))
-	newMeta := make([][]byte, len(disks))
-	for i, disk := range disks {
-		newMeta[i] = mustReadNullQuorumMeta(t, disk, bucket, object)
-	}
+	newMinorityMeta := mustReadNullQuorumMeta(t, disks[14], bucket, object)
 	// Model an incomplete overwrite using real inline shards: fifteen old
 	// copies retain a read quorum; the final disk contains the newer minority.
-	// The old quorum does not prove that the newer overwrite was uncommitted.
 	for i := range 15 {
 		if err := disks[i].WriteAll(t.Context(), bucket, object+"/"+xlStorageFormatFile, oldMeta[i]); err != nil {
 			t.Fatal(err)
@@ -725,38 +721,18 @@ func TestSingleNullQuorumReadAndConsumers(t *testing.T) {
 			t.Fatalf("wrong readable generation: %v, %v", oi.ModTime, err)
 		}
 	}
-	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		rec := nullQuorumRequest(t, router, method, getGetObjectURL("", bucket, object))
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("%s exposed an unresolved old quorum: %d", method, rec.Code)
-		}
-	}
-	if _, err := z.HealObject(t.Context(), bucket, object, "", madmin.HealOpts{Remove: true}); !isErrReadQuorum(err) {
-		t.Fatalf("heal accepted an unresolved old quorum: %v", err)
-	}
+	checkRead(oldBody, oldTime)
 	// Reading must not reinterpret the minority as absent or delete it.
 	minority, err := disks[15].ReadVersion(t.Context(), "", bucket, object, "", ReadOptions{})
 	if err != nil || !minority.ModTime.Equal(oldTime.Add(time.Minute)) {
 		t.Fatalf("read mutated the minority: %+v, %v", minority, err)
 	}
-	// Now model the safe direction: the latest generation has the quorum.
-	// Keep the migration, Walk and scanner assertions on that readable state.
-	for i := range 15 {
-		if err := disks[i].WriteAll(t.Context(), bucket, object+"/"+xlStorageFormatFile, newMeta[i]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := disks[15].WriteAll(t.Context(), bucket, object+"/"+xlStorageFormatFile, oldMeta[15]); err != nil {
-		t.Fatal(err)
-	}
-	newTime := oldTime.Add(time.Minute)
-	checkRead(newBody, newTime)
 	for _, kind := range []string{"rebalance", "decommission"} {
 		t.Run(kind, func(t *testing.T) {
 			var names []string
 			consume := func(entry metaCacheEntry) {
 				versions, err := entry.fileInfoVersions(bucket)
-				if err != nil || len(versions.Versions) != 1 || !versions.Versions[0].ModTime.Equal(newTime) {
+				if err != nil || len(versions.Versions) != 1 || !versions.Versions[0].ModTime.Equal(oldTime) {
 					t.Errorf("invalid migration metadata: %+v, %v", versions, err)
 					return
 				}
@@ -769,7 +745,7 @@ func TestSingleNullQuorumReadAndConsumers(t *testing.T) {
 				}
 				body, err := io.ReadAll(reader)
 				reader.Close()
-				if err != nil || !bytes.Equal(body, newBody) {
+				if err != nil || !bytes.Equal(body, oldBody) {
 					t.Errorf("migration could not read selected object data: %v", err)
 				}
 				names = append(names, entry.name)
@@ -792,7 +768,7 @@ func TestSingleNullQuorumReadAndConsumers(t *testing.T) {
 		}
 		var names []string
 		for result := range results {
-			if result.Err != nil || !result.Item.ModTime.Equal(newTime) {
+			if result.Err != nil || !result.Item.ModTime.Equal(oldTime) {
 				t.Fatalf("Walk returned invalid metadata: %+v", result)
 			}
 			names = append(names, result.Item.Name)
@@ -803,22 +779,22 @@ func TestSingleNullQuorumReadAndConsumers(t *testing.T) {
 	}
 
 	// Exercise the scanner's actual abandoned-child path. Make the scan drive
-	// miss the object, while keeping the latest quorum and an older minority on
+	// miss the object, while keeping an older quorum and a newer minority on
 	// the remaining disks. Its queued heal must read all disks and repair both.
-	if err := disks[14].WriteAll(t.Context(), bucket, object+"/"+xlStorageFormatFile, oldMeta[14]); err != nil {
+	if err := disks[14].WriteAll(t.Context(), bucket, object+"/"+xlStorageFormatFile, newMinorityMeta); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(filepath.Join(disks[15].Endpoint().Path, bucket, object)); err != nil {
 		t.Fatal(err)
 	}
-	scanNullQuorumAbandoned(t, z, bucket, object, newTime)
+	scanNullQuorumAbandoned(t, z, bucket, object, oldTime)
 	for i, disk := range disks {
 		fi, err := disk.ReadVersion(t.Context(), "", bucket, object, "", ReadOptions{Healing: true})
-		if err != nil || !fi.ModTime.Equal(newTime) {
+		if err != nil || !fi.ModTime.Equal(oldTime) {
 			t.Fatalf("scanner heal did not reconcile disk %d: %v, %v", i, fi.ModTime, err)
 		}
 	}
-	checkRead(newBody, newTime)
+	checkRead(oldBody, oldTime)
 	put(newBody, oldTime.Add(2*time.Minute))
 	checkRead(newBody, oldTime.Add(2*time.Minute))
 }
@@ -914,5 +890,5 @@ func scanNullQuorumAbandoned(t *testing.T, z *erasureServerPools, bucket, object
 	if flat == nil || flat.Objects != 1 || flat.Size != 8192 {
 		t.Fatalf("scanner lost the healed object from usage: %+v", flat)
 	}
-	t.Logf("scanner queued %v; healed latest quorum, repaired minority/missing copies, and retained one 8192-byte object", healed)
+	t.Logf("scanner queued %v; healed old quorum, repaired minority/missing copies, and retained one 8192-byte object", healed)
 }

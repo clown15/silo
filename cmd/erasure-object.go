@@ -126,9 +126,6 @@ func (er erasureObjects) CopyObject(ctx context.Context, srcBucket, srcObject, d
 	if err != nil {
 		return oi, toObjectErr(err, srcBucket, srcObject)
 	}
-	if err := checkObjectGenerationQuorum(fi, metaArr, errs); err != nil {
-		return oi, toObjectErr(err, srcBucket, srcObject)
-	}
 	if fi.Deleted {
 		if srcOpts.VersionID == "" {
 			return oi, toObjectErr(errFileNotFound, srcBucket, srcObject)
@@ -620,18 +617,6 @@ func readAllRawFileInfo(ctx context.Context, disks []StorageAPI, bucket, object 
 	return rawFileInfos, g.Wait()
 }
 
-// An older quorum cannot resolve a later overwrite of the same version.
-// Reads and healing must preserve that uncertainty rather than roll back
-// the visible object or erase the newer fragments.
-func checkObjectGenerationQuorum(fi FileInfo, metadata []FileInfo, errs []error) error {
-	for i, meta := range metadata {
-		if errs[i] == nil && meta.IsValid() && meta.VersionID == fi.VersionID && meta.ModTime.After(fi.ModTime) {
-			return InsufficientReadQuorum{Err: errErasureReadQuorum, Type: RQInconsistentMeta}
-		}
-	}
-	return nil
-}
-
 func pickLatestQuorumFilesInfo(ctx context.Context, rawFileInfos []RawFileInfo, errs []error, bucket, object string, readData, inclFreeVers bool) ([]FileInfo, []error) {
 	metadataArray := make([]*xlMetaV2, len(rawFileInfos))
 	metaFileInfos := make([]FileInfo, len(rawFileInfos))
@@ -674,17 +659,6 @@ func pickLatestQuorumFilesInfo(ctx context.Context, rawFileInfos []RawFileInfo, 
 		for i := range errs {
 			if errs[i] == nil {
 				errs[i] = err
-				// An empty quorum merge does not prove absence when this
-				// disk contains a readable object generation. Preserve that
-				// uncertainty instead of hiding it behind FileNotFound.
-				if errors.Is(err, errFileNotFound) && metadataArray[i] != nil {
-					for _, ver := range metadataArray[i].versions {
-						if inclFreeVers || !ver.header.FreeVersion() {
-							errs[i] = errErasureReadQuorum
-							break
-						}
-					}
-				}
 			}
 		}
 		return metaFileInfos, errs
@@ -917,6 +891,7 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 		}
 	}()
 
+	validResp := 0
 	totalResp := 0
 
 	// minDisks value is only to reduce the number of calls
@@ -949,9 +924,6 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 		if err != nil {
 			return FileInfo{}, nil, nil, time.Time{}, "", err
 		}
-		if err := checkObjectGenerationQuorum(fi, metaArr, errs); err != nil {
-			return FileInfo{}, nil, nil, time.Time{}, "", err
-		}
 
 		onlineMeta := make([]FileInfo, len(metaArr))
 		for i, disk := range onlineDisks {
@@ -972,8 +944,11 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 		err         error
 	)
 
-	for range done {
+	for success := range done {
 		totalResp++
+		if success {
+			validResp++
+		}
 
 		if totalResp >= minDisks && opts.FastGetObjInfo {
 			rw.Lock()
@@ -989,21 +964,27 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 		}
 
 		if totalResp < er.setDriveCount {
-			// A fast quorum may contain only an older generation. Include
-			// slower metadata responses before selecting a readable value.
-			continue
+			if !opts.FastGetObjInfo {
+				continue
+			}
+			if validResp < minDisks {
+				continue
+			}
 		}
 
 		rw.Lock()
 		// when its a versioned bucket and empty versionID - at totalResp == setDriveCount
 		// we must use rawFileInfo to resolve versions to figure out the latest version.
-		if opts.VersionID == "" && totalResp == er.setDriveCount && !uniformLatestVersion(metaArr, errs) {
+		if opts.VersionID == "" && totalResp == er.setDriveCount {
 			fi, onlineMeta, onlineDisks, modTime, etag, err = calcQuorum(pickLatestQuorumFilesInfo(ctx,
 				rawArr, errs, bucket, object, readData, opts.InclFreeVersions))
 		} else {
 			fi, onlineMeta, onlineDisks, modTime, etag, err = calcQuorum(metaArr, errs)
 		}
 		rw.Unlock()
+		if err == nil && (fi.InlineData() || len(fi.Data) > 0) {
+			break
+		}
 	}
 
 	if err != nil {
@@ -1017,6 +998,16 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 				} else {
 					err = errFileNotFound
 				}
+			}
+		}
+		// when we have insufficient read quorum and inconsistent metadata return
+		// file not found, since we can't possibly have a way to recover this object
+		// anyway.
+		if v, ok := err.(InsufficientReadQuorum); ok && v.Type == RQInconsistentMeta {
+			if opts.VersionID != "" {
+				err = errFileVersionNotFound
+			} else {
+				err = errFileNotFound
 			}
 		}
 		return fi, nil, nil, toObjectErr(err, bucket, object)

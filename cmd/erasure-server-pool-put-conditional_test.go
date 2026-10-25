@@ -136,7 +136,7 @@ func TestPoolsConditionalPutHTTP(t *testing.T) {
 						opts.MTime = UTCNow().Add(-time.Minute)
 						current := putConsistencyObject(t, z, bucket, object, currentPool, "current", opts)
 						defer conditionalPutPool(t, z, object, target)()
-						idx, _, err := z.getWritePoolIdx(t.Context(), bucket, object, 11, false, true)
+						idx, err := z.getWritePoolIdx(t.Context(), bucket, object, 11, false)
 						if err != nil || idx != target {
 							t.Fatalf("allocation target=%d: idx=%d err=%v", target, idx, err)
 						}

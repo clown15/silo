@@ -193,23 +193,3 @@ func (s *xlStorage) undoWrite(ctx context.Context, volume, path string, fi FileI
 	}
 	return nil
 }
-
-// All drives have replied, and fileInfoFromRaw has already validated each raw
-// buffer and selected its latest visible version. Reuse that decoded state:
-// revalidating the raw history here adds work proportional to version count.
-// Any missing response, logical disagreement, or history-property disagreement
-// retains the full merge. Legacy objects and delete markers also use that path.
-func uniformLatestVersion(meta []FileInfo, errs []error) bool {
-	if len(meta) == 0 {
-		return false
-	}
-	first := meta[0]
-	for i, fi := range meta {
-		if errs[i] != nil || !fi.IsValid() || fi.XLV1 || fi.Deleted || !fi.IsLatest || fi.NumVersions < 1 ||
-			!fi.ModTime.Equal(first.ModTime) || !sameFileInfoVersion(first, fi) ||
-			fi.NumVersions != first.NumVersions || !fi.SuccessorModTime.Equal(first.SuccessorModTime) {
-			return false
-		}
-	}
-	return true
-}
