@@ -316,6 +316,8 @@ func TestRenameCancellationKeepsLockUntilRollback(t *testing.T) {
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			defer unblock()
 			var completed atomic.Int32
+			var injectCommitFailure atomic.Bool
+			injectCommitFailure.Store(true)
 			for pi, pool := range z.serverPools {
 				set := pool.getHashedSet(object)
 				disks, switchDisks := installListingDiskSwitch(set)
@@ -330,8 +332,14 @@ func TestRenameCancellationKeepsLockUntilRollback(t *testing.T) {
 					handle := func(p *RenameDataHandlerParams) (*RenameDataResp, *grid.RemoteErr) {
 						entered <- struct{}{}
 						<-release
+						// Cancellation alone must not undo a successful quorum.
+						// This rollback fixture also fails half the disks, so its
+						// original payload/lock assertions require a real failed commit.
+						defer completed.Add(1)
+						if i >= len(disks)/2 && injectCommitFailure.Load() {
+							return nil, grid.NewRemoteErr(errDiskNotFound)
+						}
 						resp, err := disk.RenameData(context.Background(), p.SrcVolume, p.SrcPath, p.FI, p.DstVolume, p.DstPath, p.Opts)
-						completed.Add(1)
 						if err != nil {
 							return nil, grid.NewRemoteErr(err)
 						}
@@ -427,6 +435,7 @@ func TestRenameCancellationKeepsLockUntilRollback(t *testing.T) {
 			if completed.Load() != int32(n) {
 				t.Fatal("returned without accounting for every remote commit")
 			}
+			injectCommitFailure.Store(false)
 			for pi, pool := range z.serverPools {
 				for _, version := range []string{"", nullVersionID} {
 					r, err := pool.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{VersionID: version})

@@ -20,10 +20,6 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"github.com/minio/minio/internal/cachevalue"
-	"github.com/minio/minio/internal/config/drive"
-	xhttp "github.com/minio/minio/internal/http"
-	xioutil "github.com/minio/minio/internal/ioutil"
 	"io"
 	"os"
 	"strconv"
@@ -31,6 +27,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/minio/minio/internal/cachevalue"
+	"github.com/minio/minio/internal/config/drive"
+	xhttp "github.com/minio/minio/internal/http"
+	xioutil "github.com/minio/minio/internal/ioutil"
 )
 
 func mutationPools(t testing.TB) (*erasureServerPools, string) {
@@ -58,6 +59,7 @@ func mutationPools(t testing.TB) (*erasureServerPools, string) {
 	}
 	return z, bucket
 }
+
 func mutationPut(t testing.TB, z *erasureServerPools, bucket, obj string, pool int, body string, when time.Time) {
 	t.Helper()
 	_, err := z.serverPools[pool].PutObject(context.Background(), bucket, obj, mustGetPutObjReader(t, bytes.NewBufferString(body), int64(len(body)), "", ""), ObjectOptions{MTime: when})
@@ -92,13 +94,16 @@ func TestMutationReadPreservesAcknowledgedTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("old/new tags=%q/%q; equal tuple=%t", before.Metadata[xhttp.AmzObjectTagging], after.Metadata[xhttp.AmzObjectTagging], before.ModTime.Equal(after.ModTime) && before.DataDir == after.DataDir && before.Metadata["etag"] == after.Metadata["etag"])
-	oi, err := set.GetObjectInfo(t.Context(), bucket, object, ObjectOptions{FastGetObjInfo: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("successful fast GET metadata returned tags=%q", oi.UserTags)
-	if oi.UserTags != tags {
-		t.Fatalf("acknowledged tags were replaced by stale metadata despite matching ModTime/DataDir/ETag: %q", oi.UserTags)
+	for _, fast := range []bool{false, true} {
+		for _, version := range []string{"", nullVersionID} {
+			oi, err := set.GetObjectInfo(t.Context(), bucket, object, ObjectOptions{FastGetObjInfo: fast, VersionID: version})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if oi.UserTags != tags {
+				t.Fatalf("acknowledged tags replaced by stale metadata (fast=%t version=%q): %q", fast, version, oi.UserTags)
+			}
+		}
 	}
 }
 
@@ -196,14 +201,14 @@ func TestMutationRollbackPreservesAcknowledgedTags(t *testing.T) {
 	}
 }
 
-type reviewPartialRename struct {
+type delayedRenameResult struct {
 	StorageAPI
 	fail    bool
 	entered chan<- struct{}
 	release <-chan struct{}
 }
 
-func (d reviewPartialRename) RenameData(ctx context.Context, sv, sp string, fi FileInfo, dv, dp string, opts RenameOptions) (RenameDataResp, error) {
+func (d delayedRenameResult) RenameData(ctx context.Context, sv, sp string, fi FileInfo, dv, dp string, opts RenameOptions) (RenameDataResp, error) {
 	if d.fail {
 		return RenameDataResp{}, errDiskNotFound
 	}
@@ -221,7 +226,7 @@ func (d reviewPartialRename) RenameData(ctx context.Context, sv, sp string, fi F
 func TestMutationRollbackPreservesConcurrentVersion(t *testing.T) {
 	z, bucket := mutationPools(t)
 	const object = "rollback-and-version"
-	size, _ := strconv.Atoi(os.Getenv("SILO_REVIEW_BYTES"))
+	size, _ := strconv.Atoi(os.Getenv("SILO_TEST_MUTATION_BYTES"))
 	payload := func(v string) string {
 		if size > len(v) {
 			return v + strings.Repeat(".", size-len(v))
@@ -239,7 +244,7 @@ func TestMutationRollbackPreservesConcurrentVersion(t *testing.T) {
 	defer unblock()
 	aDisks := append([]StorageAPI(nil), disks...)
 	for i, d := range disks {
-		aDisks[i] = reviewPartialRename{d, i >= 4, entered, release}
+		aDisks[i] = delayedRenameResult{d, i >= 4, entered, release}
 	}
 	swap(aDisks)
 	aDone := make(chan error, 1)
@@ -462,6 +467,183 @@ func TestMutationDeleteJoinsNestedWorker(t *testing.T) {
 		case <-updated:
 		case <-time.After(5 * time.Second):
 			t.Fatal("later writer did not finish")
+		}
+	}
+}
+
+// Even an update that leaves all public fields unchanged is a later successful
+// operation. An old writer must not regain undo ownership through an ABA cycle.
+func TestMutationNoopUpdateRevokesUndo(t *testing.T) {
+	for _, method := range []string{"update", "write", "aba"} {
+		t.Run(method, func(t *testing.T) {
+			z, bucket := mutationPools(t)
+			const object = "no-op-update"
+			mutationPut(t, z, bucket, object, 0, "acknowledged", time.Now())
+			disks := z.serverPools[0].getHashedSet(object).getDisks()
+			for _, disk := range disks {
+				fi, err := disk.ReadVersion(t.Context(), "", bucket, object, "", ReadOptions{ReadData: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch method {
+				case "update":
+					err = disk.UpdateMetadata(t.Context(), bucket, object, fi, UpdateMetadataOpts{})
+				case "write":
+					err = disk.WriteMetadata(t.Context(), "", bucket, object, fi)
+				case "aba":
+					for _, etag := range []string{"temporary", fi.Metadata["etag"]} {
+						err = disk.UpdateMetadata(t.Context(), bucket, object, FileInfo{Metadata: map[string]string{"etag": etag}}, UpdateMetadataOpts{})
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := disk.DeleteVersion(t.Context(), bucket, object, fi, false, DeleteOptions{UndoWrite: true}); err != errFileVersionNotFound {
+					t.Fatalf("old writer retained undo after %s: %v", method, err)
+				}
+			}
+			r, err := z.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			body, err := io.ReadAll(r)
+			if err != nil || string(body) != "acknowledged" {
+				t.Fatalf("later acknowledged state lost: %q, %v", body, err)
+			}
+		})
+	}
+}
+
+func TestMutationCanceledSuccessfulCommitIsNotUndone(t *testing.T) {
+	z, bucket := mutationPools(t)
+	const object = "cancel-after-commit"
+	mutationPut(t, z, bucket, object, 0, "initial", time.Now().Add(-time.Hour))
+	set := z.serverPools[0].getHashedSet(object)
+	disks, swap := installListingDiskSwitch(set)
+	defer swap(disks)
+	entered, release := make(chan struct{}, len(disks)), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	wrapped := append([]StorageAPI(nil), disks...)
+	for i, disk := range disks {
+		wrapped[i] = delayedRenameResult{disk, false, entered, release}
+	}
+	swap(wrapped)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := set.PutObject(ctx, bucket, object, mustGetPutObjReader(t, strings.NewReader("committed"), 9, "", ""), ObjectOptions{})
+		done <- err
+	}()
+	for range disks {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("physical commit barrier not reached")
+		}
+	}
+	cancel()
+	unblock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("commit did not finish")
+	}
+	swap(disks)
+	r, err := set.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	body, err := io.ReadAll(r)
+	if err != nil || string(body) != "committed" {
+		t.Fatalf("cancellation rolled back an actual successful quorum: %q, %v", body, err)
+	}
+}
+
+type orderedRenameDisk struct {
+	StorageAPI
+	early     bool
+	earlyDone chan<- struct{}
+	release   <-chan struct{}
+}
+
+func (d orderedRenameDisk) RenameData(ctx context.Context, sv, sp string, fi FileInfo, dv, dp string, opts RenameOptions) (RenameDataResp, error) {
+	if !d.early {
+		<-d.release
+	}
+	r, err := d.StorageAPI.RenameData(ctx, sv, sp, fi, dv, dp, opts)
+	if d.early {
+		d.earlyDone <- struct{}{}
+		<-d.release
+	}
+	return r, err
+}
+
+func TestMutationCrossDiskOrderHasStableRead(t *testing.T) {
+	z, bucket := mutationPools(t)
+	const object = "cross-disk-order"
+	base := time.Now().Add(-time.Hour)
+	mutationPut(t, z, bucket, object, 0, "initial", base)
+	set := z.serverPools[0].getHashedSet(object)
+	disks, swap := installListingDiskSwitch(set)
+	defer swap(disks)
+	earlyDone, release := make(chan struct{}, 4), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	aDisks := append([]StorageAPI(nil), disks...)
+	for i, d := range disks {
+		aDisks[i] = orderedRenameDisk{d, i < 4, earlyDone, release}
+	}
+	swap(aDisks)
+	put := func(body string, mtime time.Time) error {
+		_, e := z.serverPools[0].PutObject(t.Context(), bucket, object,
+			mustGetPutObjReader(t, strings.NewReader(body), int64(len(body)), "", ""),
+			ObjectOptions{NoLock: true, MTime: mtime})
+		return e
+	}
+	aDone := make(chan error, 1)
+	go func() { aDone <- put("writer-A", base.Add(time.Minute)) }()
+	for range 4 {
+		select {
+		case <-earlyDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("A did not reach first-half barrier")
+		}
+	}
+	swap(disks)
+	if err := put("writer-B", base.Add(2*time.Minute)); err != nil {
+		t.Fatalf("B failed: %v", err)
+	}
+	unblock()
+	select {
+	case err := <-aDone:
+		if err != nil {
+			t.Fatalf("A failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("A did not finish")
+	}
+	t.Log("both PUTs succeeded; final per-disk order is A→B on four disks and B→A on four disks; no writer remains")
+	swap(disks)
+	for range 8 {
+		for _, version := range []string{"", nullVersionID} {
+			r, err := z.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{FastGetObjInfo: true, VersionID: version})
+			if err != nil {
+				t.Fatalf("quiescent successful writes became unreadable: %v", err)
+			}
+			body, err := io.ReadAll(r)
+			r.Close()
+			if err != nil || string(body) != "writer-B" {
+				t.Fatalf("completed reads changed value: %q %v", body, err)
+			}
 		}
 	}
 }

@@ -1570,7 +1570,11 @@ func (x *xlMetaV2) UpdateObjectVersion(fi FileInfo) error {
 				if err != nil {
 					return err
 				}
+				delete(ver.ObjectV2.MetaSys, rollbackIDKey)
 				for k, v := range fi.Metadata {
+					if k == rollbackIDKey {
+						continue
+					}
 					if len(k) > len(ReservedMetadataPrefixLower) && strings.EqualFold(k[:len(ReservedMetadataPrefixLower)], ReservedMetadataPrefixLower) {
 						ver.ObjectV2.MetaSys[k] = []byte(v)
 					} else {

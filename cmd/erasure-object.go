@@ -997,7 +997,7 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 		rw.Lock()
 		// when its a versioned bucket and empty versionID - at totalResp == setDriveCount
 		// we must use rawFileInfo to resolve versions to figure out the latest version.
-		if opts.VersionID == "" && totalResp == er.setDriveCount {
+		if opts.VersionID == "" && totalResp == er.setDriveCount && !uniformLatestVersion(rawArr, metaArr, errs) {
 			fi, onlineMeta, onlineDisks, modTime, etag, err = calcQuorum(pickLatestQuorumFilesInfo(ctx,
 				rawArr, errs, bucket, object, readData, opts.InclFreeVersions))
 		} else {
@@ -1103,11 +1103,19 @@ func (er erasureObjects) getObjectInfoAndQuorum(ctx context.Context, bucket, obj
 
 // Similar to rename but renames data from srcEntry to dstEntry at dataDir
 func renameData(ctx context.Context, disks []StorageAPI, srcBucket, srcEntry string, metadata []FileInfo, dstBucket, dstEntry string, writeQuorum int) ([]StorageAPI, []byte, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
+	}
+	// Admission is cancelable. After admission use actual disk results for
+	// commit/rollback, even if the client or namespace lease is canceled.
+	ctx = context.WithoutCancel(ctx)
 	g := errgroup.WithNErrs(len(disks))
 
 	fvID := mustGetUUID()
 	for index := range disks {
+		metadata[index].Metadata = maps.Clone(metadata[index].Metadata)
 		metadata[index].SetTierFreeVersionID(fvID)
+		metadata[index].Metadata[rollbackIDKey] = fvID
 	}
 
 	diskVersions := make([][]byte, len(disks))
