@@ -493,6 +493,10 @@ type poolErrs struct {
 }
 
 func (z *erasureServerPools) getPoolInfoExistingWithOpts(ctx context.Context, bucket, object string, opts ObjectOptions) (PoolObjInfo, []poolErrs, error) {
+	return z.getPoolInfoExisting(ctx, bucket, object, opts, false)
+}
+
+func (z *erasureServerPools) getPoolInfoExisting(ctx context.Context, bucket, object string, opts ObjectOptions, forWrite bool) (PoolObjInfo, []poolErrs, error) {
 	var noReadQuorumPools []poolErrs
 	poolObjInfos := make([]PoolObjInfo, len(z.serverPools))
 	poolOpts := make([]ObjectOptions, len(z.serverPools))
@@ -519,6 +523,27 @@ func (z *erasureServerPools) getPoolInfoExistingWithOpts(ctx context.Context, bu
 		}(i, pool, poolOpts[i])
 	}
 	wg.Wait()
+
+	if forWrite && !z.SinglePool() {
+		// Reuse the metadata already read for allocation. A healthy duplicate
+		// must not hide an unreadable pool that will veto the next GET.
+		recovery := -1
+		for i, info := range poolObjInfos {
+			if info.Err == nil || isErrObjectNotFound(info.Err) || isErrVersionNotFound(info.Err) {
+				continue
+			}
+			rq, inconsistent := info.Err.(InsufficientReadQuorum)
+			if !inconsistent || rq.Type != RQInconsistentMeta || recovery >= 0 || z.IsSuspended(i) || z.IsPoolRebalancing(i) {
+				return info, nil, info.Err
+			}
+			recovery = i
+		}
+		if recovery >= 0 {
+			// Repair the sole unreadable copy in place. One write cannot repair
+			// several pools, and draining pools cannot accept recovery writes.
+			return poolObjInfos[recovery], nil, nil
+		}
+	}
 
 	// Sort the objInfos such that we always serve latest
 	// this is a defensive change to handle any duplicate
@@ -636,20 +661,21 @@ func (z *erasureServerPools) getPoolIdxNoLock(ctx context.Context, bucket, objec
 // if none are found falls back to most available space pool, this function is
 // designed to be only used by PutObject, CopyObject (newObject creation) and NewMultipartUpload.
 func (z *erasureServerPools) getPoolIdx(ctx context.Context, bucket, object string, size int64) (idx int, err error) {
-	return z.getWritePoolIdx(ctx, bucket, object, size, false)
+	idx, _, err = z.getWritePoolIdx(ctx, bucket, object, size, false, false)
+	return idx, err
 }
 
 // getWritePoolIdx keeps the write-allocation policy when the caller already
 // holds the pools-layer object lock and must not reacquire a set read lock.
-func (z *erasureServerPools) getWritePoolIdx(ctx context.Context, bucket, object string, size int64, noLock bool) (idx int, err error) {
-	pinfo, _, err := z.getPoolInfoExistingWithOpts(ctx, bucket, object, ObjectOptions{
+func (z *erasureServerPools) getWritePoolIdx(ctx context.Context, bucket, object string, size int64, noLock, recoverWrite bool) (idx int, recovery bool, err error) {
+	pinfo, _, err := z.getPoolInfoExisting(ctx, bucket, object, ObjectOptions{
 		NoLock:             noLock,
 		SkipDecommissioned: true,
 		SkipRebalancing:    true,
-	})
+	}, recoverWrite)
 
 	if err != nil && !isErrObjectNotFound(err) {
-		return -1, err
+		return -1, false, err
 	}
 
 	idx = pinfo.Index
@@ -657,11 +683,11 @@ func (z *erasureServerPools) getWritePoolIdx(ctx context.Context, bucket, object
 		// will generate a temp object
 		idx = z.getAvailablePoolIdx(ctx, bucket, object, size)
 		if idx < 0 {
-			return -1, toObjectErr(errDiskFull)
+			return -1, false, toObjectErr(errDiskFull)
 		}
 	}
 
-	return idx, nil
+	return idx, recoverWrite && isErrReadQuorum(pinfo.Err), nil
 }
 
 func (z *erasureServerPools) Shutdown(ctx context.Context) error {
@@ -1203,7 +1229,8 @@ func (z *erasureServerPools) PutObject(ctx context.Context, bucket string, objec
 		opts.replicaObjectInfo = resolve
 	}
 
-	idx, err := z.getWritePoolIdx(ctx, bucket, object, data.Size(), true)
+	recoverWrite := !opts.ReplicationRequest && !opts.ReplicaLockReconcile && !opts.DataMovement
+	idx, recovery, err := z.getWritePoolIdx(ctx, bucket, object, data.Size(), true, recoverWrite)
 	if err != nil {
 		return ObjectInfo{}, err
 	}
@@ -1226,6 +1253,17 @@ func (z *erasureServerPools) PutObject(ctx context.Context, bucket string, objec
 		opts.replicaObjectInfo = z.replicaObjectInfo
 	}
 	oi, err := z.serverPools[idx].PutObject(ctx, bucket, object, data, opts)
+	if err == nil && recovery {
+		// Only recovery pays for a second read. A partial repair or a new
+		// unreadable pool must not be acknowledged as recovered. Keep any
+		// committed write on failure; a read failure is not permission to undo.
+		var latest ObjectInfo
+		var latestIdx int
+		latest, latestIdx, err = z.getLatestObjectInfoWithIdx(ctx, bucket, object, ObjectOptions{NoLock: true, NoAuditLog: true})
+		if err == nil && (latestIdx != idx || latest.VersionID != oi.VersionID || latest.ETag != oi.ETag || !latest.ModTime.Equal(oi.ModTime)) {
+			err = InsufficientReadQuorum{Bucket: bucket, Object: decodeDirObject(object), Err: errErasureReadQuorum, Type: RQInconsistentMeta}
+		}
+	}
 	if err == nil && opts.ReplicaLockReconcile && !opts.DataMovement {
 		err = z.retireReplicaCopies(ctx, bucket, object, idx, oi)
 	}
