@@ -31,12 +31,20 @@ import (
 
 	"github.com/minio/minio/internal/cachevalue"
 	"github.com/minio/minio/internal/config/drive"
+	"github.com/minio/minio/internal/config/storageclass"
 	xhttp "github.com/minio/minio/internal/http"
 	xioutil "github.com/minio/minio/internal/ioutil"
 )
 
 func mutationPools(t testing.TB) (*erasureServerPools, string) {
 	t.Helper()
+	// These scenarios require a 4+4 set: five physical commits form a
+	// readable generation, while four successful replies fail write quorum.
+	// Other server tests can leave EC:0 configured before this fixture runs.
+	previousStorageClass := globalStorageClass
+	globalStorageClass.Update(storageclass.Config{Standard: storageclass.StorageClass{Parity: 4}})
+	t.Cleanup(func() { globalStorageClass.Update(previousStorageClass) })
+
 	ctx, cancel := context.WithCancel(context.Background())
 	dirs, err := getRandomDisks(8)
 	if err != nil {
