@@ -9,6 +9,7 @@
 package cmd
 
 import (
+	"context"
 	xhttp "github.com/minio/minio/internal/http"
 	"io"
 	"strconv"
@@ -195,4 +196,23 @@ func uniformLatestVersion(meta []FileInfo, errs []error) bool {
 		}
 	}
 	return true
+}
+
+type orderedRenameDisk struct {
+	StorageAPI
+	early     bool
+	earlyDone chan<- struct{}
+	release   <-chan struct{}
+}
+
+func (d orderedRenameDisk) RenameData(ctx context.Context, sv, sp string, fi FileInfo, dv, dp string, opts RenameOptions) (RenameDataResp, error) {
+	if !d.early {
+		<-d.release
+	}
+	r, err := d.StorageAPI.RenameData(ctx, sv, sp, fi, dv, dp, opts)
+	if d.early {
+		d.earlyDone <- struct{}{}
+		<-d.release
+	}
+	return r, err
 }

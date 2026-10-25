@@ -605,25 +605,6 @@ func TestMutationCanceledSuccessfulCommitIsNotUndone(t *testing.T) {
 	}
 }
 
-type orderedRenameDisk struct {
-	StorageAPI
-	early     bool
-	earlyDone chan<- struct{}
-	release   <-chan struct{}
-}
-
-func (d orderedRenameDisk) RenameData(ctx context.Context, sv, sp string, fi FileInfo, dv, dp string, opts RenameOptions) (RenameDataResp, error) {
-	if !d.early {
-		<-d.release
-	}
-	r, err := d.StorageAPI.RenameData(ctx, sv, sp, fi, dv, dp, opts)
-	if d.early {
-		d.earlyDone <- struct{}{}
-		<-d.release
-	}
-	return r, err
-}
-
 // Partial no-op updates may revoke undo on only some disks. That internal
 // capability must not split the quorum of otherwise identical object contents.
 func TestMutationPartialNoopPreservesReadability(t *testing.T) {
