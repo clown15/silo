@@ -1259,7 +1259,12 @@ func (z *erasureServerPools) PutObject(ctx context.Context, bucket string, objec
 		// committed write on failure; a read failure is not permission to undo.
 		var latest ObjectInfo
 		var latestIdx int
-		latest, latestIdx, err = z.getLatestObjectInfoWithIdx(ctx, bucket, object, ObjectOptions{NoLock: true, NoAuditLog: true})
+		latest, latestIdx, err = z.getLatestObjectInfoWithIdx(ctx, bucket, object, ObjectOptions{
+			NoLock:           true,
+			NoAuditLog:       true,
+			Versioned:        opts.Versioned,
+			VersionSuspended: opts.VersionSuspended,
+		})
 		if err == nil && (latestIdx != idx || latest.VersionID != oi.VersionID || latest.ETag != oi.ETag || !latest.ModTime.Equal(oi.ModTime)) {
 			err = InsufficientReadQuorum{Bucket: bucket, Object: decodeDirObject(object), Err: errErasureReadQuorum, Type: RQInconsistentMeta}
 		}
