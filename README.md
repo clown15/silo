@@ -43,6 +43,12 @@ This release strengthens Object Lock and IAM authorization, makes scoped STS rev
 
 Read the [release notes](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-18T00-00-00Z) before upgrading, especially the removal of strict multipart listing, coordinated server upgrades, and measured performance costs. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the people behind the code, reports, and documentation.
 
+Current source is unreleased: Go 1.27.3, silo-pkg v3.15.1, mcli 20261025,
+upstream minio-go `ab93db7ba435`, and the Console 2.5.0 candidate `abc1729b5a23`.
+It includes the Server IAM cache repair needed by Console's **Reset to default**
+action. See [CHANGELOG.md](CHANGELOG.md#unreleased); the published artifacts above
+retain their original component versions.
+
 ## Overview
 
 PGSTY SILO keeps one maintained release line of the open-source MinIO server alive after upstream ended community distribution: builds, packages, multi-arch images, security fixes, and the full web console. Pigsty runs it in production as its PostgreSQL backup repository.

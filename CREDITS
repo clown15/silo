@@ -18146,6 +18146,18 @@ The licenses and notices of every third-party component linked into the binary
 or bundled into the web application are collected in the CREDITS file next to
 this notice (`console credits`, or /legal/CREDITS on a running server).
 
+The in-tree MinIO Design System (MDS) in web-app/packages/mds is derived from
+https://github.com/georgmangold/mds, revision
+b66d0b06272ae88e3975248691799a1cb0b4d6de (v1.1.5.9), and is licensed under
+AGPL-3.0-or-later. Copyright remains with MinIO, Inc. and its contributors.
+Its unchanged LICENSE and vendoring history are in web-app/packages/mds;
+local modifications are documented in UPSTREAM.md there.
+
+The surface/shadow token recipes adapt Fluid Functionalism by Micka Touillaud,
+https://github.com/mickadesign/fluid-functionalism, under the MIT License.
+Copyright (c) 2026 Micka Touillaud. The full MIT notice is retained in
+web-app/licenses/fluid-functionalism-MIT.txt and generated into CREDITS.
+
 ================================================================
 
 github.com/minio/crc64nvme
