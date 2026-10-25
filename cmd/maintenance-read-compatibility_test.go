@@ -8,6 +8,8 @@ import (
 	"context"
 	"io"
 	"testing"
+
+	"github.com/minio/minio/internal/config/storageclass"
 )
 
 type compatibilityFailedOverwrite struct {
@@ -28,6 +30,12 @@ func (d compatibilityFailedOverwrite) RenameData(ctx context.Context, sv, sp str
 // overwrite with one residue, keep the previously acknowledged quorum readable.
 // This tests a known history; it does not claim the resulting snapshot proves it.
 func TestMaintenancePartialFailedOverwriteAvailability(t *testing.T) {
+	// Lock RPC tests configure a single-drive backend (EC:0). Pin this
+	// fixture to 12+4 so its fifteen old shards really have read quorum.
+	previousStorageClass := globalStorageClass
+	globalStorageClass.Update(storageclass.Config{Standard: storageclass.StorageClass{Parity: 4}})
+	t.Cleanup(func() { globalStorageClass.Update(previousStorageClass) })
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dirs, err := getRandomDisks(16)
@@ -60,6 +68,10 @@ func TestMaintenancePartialFailedOverwriteAvailability(t *testing.T) {
 	set := z.serverPools[0].getHashedSet(key)
 	getDisks := set.getDisks
 	disks := getDisks()
+	fi, err := disks[0].ReadVersion(ctx, "", bucket, key, "", ReadOptions{})
+	if err != nil || fi.Erasure.DataBlocks != 12 || fi.Erasure.ParityBlocks != 4 {
+		t.Fatalf("compatibility fixture must have 12+4 erasure coding: %+v, %v", fi.Erasure, err)
+	}
 	wrapped := append([]StorageAPI(nil), disks...)
 	for i, d := range disks {
 		wrapped[i] = compatibilityFailedOverwrite{d, i == 0}
