@@ -11,7 +11,7 @@
   Go dependencies, including silo-pkg v3.15.1, the published mcli 20261025
   source and upstream minio-go `ab93db7ba435` for multipart, read/seek and
   batch-delete fixes. Retain output-format and NetBSD compatibility selections.
-- Embed the unreleased Console 2.5.0 candidate `abc1729b5a23`, including its
+- Embed the unreleased Console 2.5.0 candidate `ab4309ffb54d`, including its
   GUI update, diagnostic WebSocket closing handshake and complete health-report
   decoding. This selects a source commit, not a new Console release.
 - Read current bucket inventory in account-info responses so Console refreshes
