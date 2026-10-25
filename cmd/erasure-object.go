@@ -997,7 +997,7 @@ func (er erasureObjects) getObjectFileInfo(ctx context.Context, bucket, object s
 		rw.Lock()
 		// when its a versioned bucket and empty versionID - at totalResp == setDriveCount
 		// we must use rawFileInfo to resolve versions to figure out the latest version.
-		if opts.VersionID == "" && totalResp == er.setDriveCount && !uniformLatestVersion(rawArr, metaArr, errs) {
+		if opts.VersionID == "" && totalResp == er.setDriveCount && !uniformLatestVersion(metaArr, errs) {
 			fi, onlineMeta, onlineDisks, modTime, etag, err = calcQuorum(pickLatestQuorumFilesInfo(ctx,
 				rawArr, errs, bucket, object, readData, opts.InclFreeVersions))
 		} else {

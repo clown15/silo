@@ -194,37 +194,20 @@ func (s *xlStorage) undoWrite(ctx context.Context, volume, path string, fi FileI
 	return nil
 }
 
-// All drives have replied. A uniform indexed latest version may avoid the
-// second metadata decode, including healthy version histories. Conflicts retain
-// the full merge. Exact FileInfo comparison also prevents the four-byte header
-// signature from being treated as a collision-free identity.
-func uniformLatestVersion(raw []RawFileInfo, meta []FileInfo, errs []error) bool {
-	if len(raw) == 0 {
+// All drives have replied, and fileInfoFromRaw has already validated each raw
+// buffer and selected its latest visible version. Reuse that decoded state:
+// revalidating the raw history here adds work proportional to version count.
+// Any missing response, logical disagreement, or history-property disagreement
+// retains the full merge. Legacy objects and delete markers also use that path.
+func uniformLatestVersion(meta []FileInfo, errs []error) bool {
+	if len(meta) == 0 {
 		return false
 	}
-	var first xlMetaV2VersionHeader
-	var firstVersions int
-	for i, r := range raw {
-		if errs[i] != nil || !meta[i].IsValid() || !sameFileInfoVersion(meta[0], meta[i]) {
-			return false
-		}
-		buf, _, err := isIndexedMetaV2(r.Buf)
-		if err != nil || buf == nil {
-			return false
-		}
-		n, hv, mv, rest, err := decodeXLHeaders(buf)
-		if err != nil || n < 1 || mv != xlMetaVersion {
-			return false
-		}
-		var h xlMetaV2VersionHeader
-		err = decodeVersions(rest, 1, func(_ int, hdr, _ []byte) error { _, e := h.unmarshalV(hv, hdr); return e })
-		if err != nil || h.Type != ObjectType || h.FreeVersion() {
-			return false
-		}
-		if i == 0 {
-			first = h
-			firstVersions = n
-		} else if h != first || n != firstVersions || meta[i].NumVersions != meta[0].NumVersions || !meta[i].SuccessorModTime.Equal(meta[0].SuccessorModTime) {
+	first := meta[0]
+	for i, fi := range meta {
+		if errs[i] != nil || !fi.IsValid() || fi.XLV1 || fi.Deleted || !fi.IsLatest || fi.NumVersions < 1 ||
+			!fi.ModTime.Equal(first.ModTime) || !sameFileInfoVersion(first, fi) ||
+			fi.NumVersions != first.NumVersions || !fi.SuccessorModTime.Equal(first.SuccessorModTime) {
 			return false
 		}
 	}

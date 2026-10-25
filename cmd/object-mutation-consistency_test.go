@@ -138,7 +138,7 @@ func TestMutationVersionHistoryRead(t *testing.T) {
 			}
 			meta[i], errs[i] = fileInfoFromRaw(raw[i], bucket, object, false, false)
 		}
-		return uniformLatestVersion(raw, meta, errs)
+		return uniformLatestVersion(meta, errs)
 	}
 	if !uniform() {
 		t.Fatal("healthy version history requires redundant full metadata decoding")
