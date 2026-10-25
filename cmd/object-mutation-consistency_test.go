@@ -107,6 +107,73 @@ func TestMutationReadPreservesAcknowledgedTags(t *testing.T) {
 	}
 }
 
+// A healthy version history must reuse the already decoded latest version.
+// A stale same-version tag copy must still take the full consistency path.
+func TestMutationVersionHistoryRead(t *testing.T) {
+	z, bucket := mutationPools(t)
+	const object = "history-read"
+	set := z.serverPools[0].getHashedSet(object)
+	var versions []string
+	for i := range 12 {
+		id := mustGetUUID()
+		body := "version-" + strconv.Itoa(i)
+		_, err := set.PutObject(t.Context(), bucket, object, mustGetPutObjReader(t, strings.NewReader(body), int64(len(body)), "", ""), ObjectOptions{Versioned: true, VersionID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		versions = append(versions, id)
+	}
+	disks, swap := installListingDiskSwitch(set)
+	defer swap(disks)
+	uniform := func() bool {
+		raw := make([]RawFileInfo, len(disks))
+		meta := make([]FileInfo, len(disks))
+		errs := make([]error, len(disks))
+		for i, disk := range disks {
+			var err error
+			raw[i], err = disk.ReadXL(t.Context(), bucket, object, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta[i], errs[i] = fileInfoFromRaw(raw[i], bucket, object, false, false)
+		}
+		return uniformLatestVersion(raw, meta, errs)
+	}
+	if !uniform() {
+		t.Fatal("healthy version history requires redundant full metadata decoding")
+	}
+	partial := append([]StorageAPI(nil), disks...)
+	partial[0] = nil
+	swap(partial)
+	const tags = "owner=latest-acknowledged"
+	if _, err := set.PutObjectTags(t.Context(), bucket, object, tags, ObjectOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	swap(disks)
+	if uniform() {
+		t.Fatal("stale same-version metadata incorrectly accepted as uniform")
+	}
+	for _, fast := range []bool{false, true} {
+		for _, version := range []string{"", versions[len(versions)-1]} {
+			oi, err := set.GetObjectInfo(t.Context(), bucket, object, ObjectOptions{FastGetObjInfo: fast, VersionID: version})
+			if err != nil || oi.VersionID != versions[len(versions)-1] || oi.UserTags != tags {
+				t.Fatalf("latest version/tags changed: version=%q tags=%q err=%v", oi.VersionID, oi.UserTags, err)
+			}
+		}
+	}
+	for i, id := range versions {
+		r, err := set.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{VersionID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(r)
+		r.Close()
+		if err != nil || string(body) != "version-"+strconv.Itoa(i) {
+			t.Fatalf("history version %d changed: %q err=%v", i, body, err)
+		}
+	}
+}
+
 type mutationAmbiguousRename struct {
 	StorageAPI
 	index   int
