@@ -43,6 +43,11 @@
 
 升级前请阅读[发行说明](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-18T00-00-00Z)，特别是 strict 分片列表的移除、服务端协调升级要求与实测性能成本。代码、问题报告和文档贡献者见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
 
+当前源码尚未发布：使用 Go 1.27.3、silo-pkg v3.15.1、mcli 20261025、上游
+minio-go `ab93db7ba435`，并内嵌 Console 2.5.0 候选提交 `abc1729b5a23`。
+其中包含 Console **Reset to default（恢复默认）** 所需的 Server IAM 缓存修复。
+详见 [CHANGELOG.md](CHANGELOG.md#unreleased)；上述已发布制品仍保留原有组件版本。
+
 ## 概述
 
 上游停止社区发行后，Silo 为开源 MinIO 服务端维护一条持续可用的版本线：构建、软件包、多架构镜像、安全修复与完整 Web 控制台。Pigsty 在生产环境中用它承载 PostgreSQL 备份存储。

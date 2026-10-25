@@ -8,7 +8,19 @@
   Thanks to [@910patin](https://github.com/910patin) for the original fix and
   reproduction in [#250](https://github.com/pgsty/silo/pull/250).
 - Build the server and standalone debugging tools with Go 1.27.3 and refresh
-  Go dependencies. Keep the published Console, mcli and silo-pkg references.
+  Go dependencies, including silo-pkg v3.15.1, the published mcli 20261025
+  source and upstream minio-go `ab93db7ba435` for multipart, read/seek and
+  batch-delete fixes. Retain output-format and NetBSD compatibility selections.
+- Embed the unreleased Console 2.5.0 candidate `abc1729b5a23`, including its
+  GUI update, diagnostic WebSocket closing handshake and complete health-report
+  decoding. This selects a source commit, not a new Console release.
+- Read current bucket inventory in account-info responses so Console refreshes
+  immediately reflect successful creation and deletion. This management endpoint
+  now performs a live list instead of returning a cached inventory.
+- Restore the native built-in policy immediately after resetting an override.
+  Peer and etcd notifications reload committed state, so delayed delete events
+  preserve subsequent edits. Keep deletion revisions, policy-in-use checks and
+  custom-policy deletion behavior; storage failures retain the previous policy.
 - Preserve Kafka's default broker protocol 2.1 and terminal-width behavior;
   fix legacy DARE v1 key unsealing and verify DARE v1/v2 and MinKMS TLS compatibility.
 - Update bundled curl to 8.23.0 and require patched static libraries. Apply
