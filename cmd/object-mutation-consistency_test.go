@@ -22,6 +22,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -368,6 +369,9 @@ func TestMutationRollbackPreservesConcurrentVersion(t *testing.T) {
 	}
 	swap(disks)
 	t.Logf("B metadata survives on %d of eight drives after A's rollback", countB())
+	if n := countB(); n != 7 {
+		t.Fatalf("unrelated rollback removed B's acknowledged copies: got %d, want 7", n)
+	}
 	r, err := z.GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{VersionID: bVersion})
 	if err != nil {
 		t.Fatalf("acknowledged B became unreadable after unrelated rollback: %v", err)
@@ -398,6 +402,79 @@ func TestMutationDeleteMarkerDoesNotReenter(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("DeleteVersion(forceDelMarker) blocked acquiring the same guard again through WriteMetadata")
+	}
+}
+
+// Cleanup can arrive after an RPC reply is lost while the real disk commit is
+// still running. Both single and bulk cleanup must retain its staged metadata.
+func TestMutationStagingCleanupWaitsForCommit(t *testing.T) {
+	for _, bulk := range []bool{false, true} {
+		t.Run(strconv.FormatBool(bulk), func(t *testing.T) {
+			disk, root, err := newXLStorageTestSetup(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer disk.Close()
+			if err := disk.MakeVol(t.Context(), "bucket"); err != nil {
+				t.Fatal(err)
+			}
+			var lastSuccess int64
+			gate := &stagedRenameContext{
+				Context: context.Background(), meta: filepath.Join(root, minioMetaTmpBucket, "staged", xlStorageFormatFile),
+				entered: make(chan struct{}), release: make(chan struct{}),
+				tracker: healthDiskCtxValue{lastSuccess: &lastSuccess},
+			}
+			unblock := sync.OnceFunc(func() { close(gate.release) })
+			defer unblock()
+			fi := newFileInfo("object", 2, 2)
+			fi.DataDir, fi.ModTime, fi.Erasure.Index = mustGetUUID(), UTCNow(), 1
+			fi.Fresh = true
+			committed := make(chan error, 1)
+			go func() {
+				_, err := disk.RenameData(gate, minioMetaTmpBucket, "staged", fi, "bucket", "object", RenameOptions{})
+				committed <- err
+			}()
+			select {
+			case <-gate.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("commit did not reach staging barrier")
+			}
+			cleaned := make(chan error, 1)
+			go func() {
+				if bulk {
+					cleaned <- disk.DeleteBulk(t.Context(), minioMetaTmpBucket, pathJoin("staged", xlStorageFormatFile))
+				} else {
+					cleaned <- disk.Delete(t.Context(), minioMetaTmpBucket, "staged", DeleteOptions{Recursive: true})
+				}
+			}()
+			early := false
+			select {
+			case err := <-cleaned:
+				early = true
+				t.Errorf("cleanup overtook admitted disk commit: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			unblock()
+			select {
+			case err := <-committed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("commit did not finish")
+			}
+			if !early {
+				select {
+				case <-cleaned:
+				case <-time.After(5 * time.Second):
+					t.Fatal("cleanup did not finish")
+				}
+			}
+			got, err := disk.ReadVersion(t.Context(), "", "bucket", "object", "", ReadOptions{})
+			if err != nil || got.DataDir != fi.DataDir || !got.ModTime.Equal(fi.ModTime) {
+				t.Fatalf("cleanup lost committed metadata: got=%+v err=%v", got, err)
+			}
+		})
 	}
 }
 

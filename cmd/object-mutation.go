@@ -168,15 +168,16 @@ func (s *xlStorage) undoWrite(ctx context.Context, volume, path string, fi FileI
 	return nil
 }
 
-// All drives have replied. Only a uniform indexed null version may avoid the
-// second metadata decode. Histories and conflicts retain the full merge. Exact
-// FileInfo comparison also prevents the four-byte header signature from being
-// treated as a collision-free identity.
+// All drives have replied. A uniform indexed latest version may avoid the
+// second metadata decode, including healthy version histories. Conflicts retain
+// the full merge. Exact FileInfo comparison also prevents the four-byte header
+// signature from being treated as a collision-free identity.
 func uniformLatestVersion(raw []RawFileInfo, meta []FileInfo, errs []error) bool {
 	if len(raw) == 0 {
 		return false
 	}
 	var first xlMetaV2VersionHeader
+	var firstVersions int
 	for i, r := range raw {
 		if errs[i] != nil || !meta[i].IsValid() || !sameFileInfoVersion(meta[0], meta[i]) {
 			return false
@@ -186,17 +187,18 @@ func uniformLatestVersion(raw []RawFileInfo, meta []FileInfo, errs []error) bool
 			return false
 		}
 		n, hv, mv, rest, err := decodeXLHeaders(buf)
-		if err != nil || n != 1 || mv != xlMetaVersion {
+		if err != nil || n < 1 || mv != xlMetaVersion {
 			return false
 		}
 		var h xlMetaV2VersionHeader
-		err = decodeVersions(rest, n, func(_ int, hdr, _ []byte) error { _, e := h.unmarshalV(hv, hdr); return e })
-		if err != nil || h.Type != ObjectType || h.FreeVersion() || h.VersionID != [16]byte{} {
+		err = decodeVersions(rest, 1, func(_ int, hdr, _ []byte) error { _, e := h.unmarshalV(hv, hdr); return e })
+		if err != nil || h.Type != ObjectType || h.FreeVersion() {
 			return false
 		}
 		if i == 0 {
 			first = h
-		} else if h != first {
+			firstVersions = n
+		} else if h != first || n != firstVersions || meta[i].NumVersions != meta[0].NumVersions || !meta[i].SuccessorModTime.Equal(meta[0].SuccessorModTime) {
 			return false
 		}
 	}
