@@ -117,12 +117,14 @@ func (d recoveryReadFaultDisk) ReadXL(ctx context.Context, bucket, object string
 	}
 	return d.StorageAPI.ReadXL(ctx, bucket, object, data)
 }
+
 func (d recoveryReadFaultDisk) ReadVersion(ctx context.Context, orig, bucket, object, version string, opts ReadOptions) (FileInfo, error) {
 	if bucket == d.bucket && object == d.object && d.fail.Load() {
 		return FileInfo{}, errDiskNotFound
 	}
 	return d.StorageAPI.ReadVersion(ctx, orig, bucket, object, version, opts)
 }
+
 func (d recoveryReadFaultDisk) RenameData(ctx context.Context, sv, sp string, fi FileInfo, dv, dp string, opts RenameOptions) (RenameDataResp, error) {
 	res, err := d.StorageAPI.RenameData(ctx, sv, sp, fi, dv, dp, opts)
 	if err == nil && d.afterRename && dv == d.bucket && dp == d.object {
@@ -216,20 +218,21 @@ func TestPoolsRecoveryRefusesUnresolvedPools(t *testing.T) {
 			if result.Code != http.StatusServiceUnavailable {
 				t.Errorf("unresolved recovery returned HTTP=%d: %s", result.Code, result.Body.String())
 			}
-			if !postCommitFailure {
+			switch {
+			case !postCommitFailure:
 				after := snapshot()
 				for i := range before {
 					if before[i] != after[i] {
 						t.Errorf("refused preflight modified shard %d", i)
 					}
 				}
-			} else if mode == "read-fails-after-commit" {
+			case mode == "read-fails-after-commit":
 				fail.Store(false)
 				got := consistencyRequest(t, router, http.MethodGet, bucket, object, "")
 				if got.Code != http.StatusOK || !bytes.Equal(got.Body.Bytes(), replacement) {
 					t.Errorf("read validation failure must not undo committed recovery: HTTP=%d", got.Code)
 				}
-			} else {
+			default:
 				// A readable but different latest copy cannot confirm recovery.
 				// The committed replacement must still remain in its target pool.
 				r, err := z.serverPools[0].GetObjectNInfo(t.Context(), bucket, object, nil, nil, ObjectOptions{})
