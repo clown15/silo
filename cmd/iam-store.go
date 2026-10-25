@@ -647,6 +647,20 @@ func setDefaultCannedPolicies(policies map[string]PolicyDoc) {
 	}
 }
 
+// Remove a stored policy from cache. A built-in policy's deletion removes its
+// override, so its native definition remains available with native metadata.
+// The durable tombstone is retained separately to reject stale overrides.
+func removePolicyFromCache(name string, policies map[string]PolicyDoc) (restoredDefault bool) {
+	delete(policies, name)
+	for _, p := range policy.DefaultPolicies {
+		if p.Name == name {
+			policies[name] = defaultPolicyDoc(p.Definition)
+			return true
+		}
+	}
+	return false
+}
+
 // LoadIAMCache reads all IAM items and populates a new iamCache object and
 // replaces the in-memory cache object.
 func (store *IAMStoreSys) LoadIAMCache(ctx context.Context, firstTime bool) error {
@@ -722,7 +736,7 @@ func (store *IAMStoreSys) LoadIAMCache(ctx context.Context, firstTime bool) erro
 
 	for name := range newCache.iamPolicyDocsMap {
 		if store.revisionIndex().get(getPolicyDocPath(name)).Deleted {
-			delete(newCache.iamPolicyDocsMap, name)
+			removePolicyFromCache(name, newCache.iamPolicyDocsMap)
 		}
 	}
 
@@ -1376,9 +1390,9 @@ func (store *IAMStoreSys) PolicyDBSet(ctx context.Context, name, policy string, 
 }
 
 // PolicyNotificationHandler - loads given policy from storage. If not present,
-// deletes from cache. This notification only reads from storage, and updates
-// cache. When the notification is for a policy deletion, it updates the
-// user-policy and group-policy maps as well.
+// removes its override from cache. This notification only reads from storage,
+// and updates cache. A deleted built-in override restores its native policy;
+// a deleted custom policy is removed from user-policy and group-policy maps.
 func (store *IAMStoreSys) PolicyNotificationHandler(ctx context.Context, policy string) error {
 	if policy == "" {
 		return errInvalidArgument
@@ -1389,8 +1403,10 @@ func (store *IAMStoreSys) PolicyNotificationHandler(ctx context.Context, policy 
 
 	err := store.loadPolicyDoc(ctx, policy, cache.iamPolicyDocsMap)
 	if errors.Is(err, errNoSuchPolicy) {
-		// policy was deleted, update cache.
-		delete(cache.iamPolicyDocsMap, policy)
+		if removePolicyFromCache(policy, cache.iamPolicyDocsMap) {
+			cache.updatedAt = time.Now()
+			return nil
+		}
 
 		// update user policy map
 		cache.iamUserPolicyMap.Range(func(u string, mp MappedPolicy) bool {
@@ -1426,74 +1442,77 @@ func (store *IAMStoreSys) PolicyNotificationHandler(ctx context.Context, policy 
 		cache.updatedAt = time.Now()
 		return nil
 	}
+	if err == nil {
+		cache.updatedAt = time.Now()
+	}
 	return err
 }
 
-// DeletePolicy - deletes policy from storage and cache. When this called in
-// response to a notification (i.e. isFromNotification = true), it skips the
-// validation of policy usage and the attempt to delete in the backend as well
-// (as this is already done by the notifying node).
+// DeletePolicy - deletes a stored policy and restores the native definition
+// when it was a built-in override. Notifications reload committed storage, so
+// a delayed deletion event cannot remove a subsequently recreated policy.
 func (store *IAMStoreSys) DeletePolicy(ctx context.Context, policy string, isFromNotification bool) error {
 	if policy == "" {
 		return errInvalidArgument
+	}
+	if isFromNotification {
+		return store.PolicyNotificationHandler(ctx, policy)
 	}
 
 	cache := store.lock()
 	defer store.unlock()
 
-	if !isFromNotification {
-		if err := store.checkIAMRevision(ctx, getPolicyDocPath(policy), true); err != nil {
-			return err
+	if err := store.checkIAMRevision(ctx, getPolicyDocPath(policy), true); err != nil {
+		return err
+	}
+	if _, replicated := iamReplicationTime(ctx); !replicated {
+		if _, exists := cache.iamPolicyDocsMap[policy]; !exists {
+			// Preserve idempotent local deletion without creating a durable
+			// revocation for a misspelled/nonexistent policy name.
+			return nil
 		}
-		if _, replicated := iamReplicationTime(ctx); !replicated {
-			if _, exists := cache.iamPolicyDocsMap[policy]; !exists {
-				// Preserve idempotent local deletion without creating a durable
-				// revocation for a misspelled/nonexistent policy name.
-				return nil
+		// Check if policy is mapped to any existing user or group. If so, we do not
+		// allow deletion of the policy. If the policy is mapped to an STS account,
+		// we do allow deletion.
+		users := []string{}
+		groups := []string{}
+		cache.iamUserPolicyMap.Range(func(u string, mp MappedPolicy) bool {
+			pset := mp.policySet()
+			if store.getUsersSysType() == MinIOUsersSysType {
+				if _, ok := cache.iamUsersMap[u]; !ok {
+					// This case can happen when a temporary account is
+					// deleted or expired - remove it from userPolicyMap.
+					cache.iamUserPolicyMap.Delete(u)
+					return true
+				}
 			}
-			// Check if policy is mapped to any existing user or group. If so, we do not
-			// allow deletion of the policy. If the policy is mapped to an STS account,
-			// we do allow deletion.
-			users := []string{}
-			groups := []string{}
-			cache.iamUserPolicyMap.Range(func(u string, mp MappedPolicy) bool {
-				pset := mp.policySet()
-				if store.getUsersSysType() == MinIOUsersSysType {
-					if _, ok := cache.iamUsersMap[u]; !ok {
-						// This case can happen when a temporary account is
-						// deleted or expired - remove it from userPolicyMap.
-						cache.iamUserPolicyMap.Delete(u)
-						return true
-					}
-				}
-				if pset.Contains(policy) {
-					users = append(users, u)
-				}
-				return true
-			})
-			cache.iamGroupPolicyMap.Range(func(g string, mp MappedPolicy) bool {
-				pset := mp.policySet()
-				if pset.Contains(policy) {
-					groups = append(groups, g)
-				}
-				return true
-			})
-			if len(users) != 0 || len(groups) != 0 {
-				return errPolicyInUse
+			if pset.Contains(policy) {
+				users = append(users, u)
 			}
-		}
-
-		err := store.deletePolicyDoc(ctx, policy)
-		if errors.Is(err, errNoSuchPolicy) {
-			// Ignore error if policy is already deleted.
-			err = nil
-		}
-		if err != nil {
-			return err
+			return true
+		})
+		cache.iamGroupPolicyMap.Range(func(g string, mp MappedPolicy) bool {
+			pset := mp.policySet()
+			if pset.Contains(policy) {
+				groups = append(groups, g)
+			}
+			return true
+		})
+		if len(users) != 0 || len(groups) != 0 {
+			return errPolicyInUse
 		}
 	}
 
-	delete(cache.iamPolicyDocsMap, policy)
+	err := store.deletePolicyDoc(ctx, policy)
+	if errors.Is(err, errNoSuchPolicy) {
+		// Ignore error if policy is already deleted.
+		err = nil
+	}
+	if err != nil {
+		return err
+	}
+
+	removePolicyFromCache(policy, cache.iamPolicyDocsMap)
 	cache.updatedAt = time.Now()
 
 	return nil
