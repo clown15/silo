@@ -58,7 +58,7 @@ func sameFileInfoVersion(a, b FileInfo) bool {
 	if a.VersionID != b.VersionID || a.Deleted != b.Deleted || a.XLV1 != b.XLV1 || a.Size != b.Size ||
 		a.TransitionStatus != b.TransitionStatus || a.TransitionTier != b.TransitionTier ||
 		a.TransitionedObjName != b.TransitionedObjName || a.TransitionVersionID != b.TransitionVersionID ||
-		!maps.Equal(a.Metadata, b.Metadata) || !bytes.Equal(a.Checksum, b.Checksum) || len(a.Parts) != len(b.Parts) {
+		!sameVersionMetadata(a.Metadata, b.Metadata) || !bytes.Equal(a.Checksum, b.Checksum) || len(a.Parts) != len(b.Parts) {
 		return false
 	}
 	if !a.Deleted && a.Size != 0 && !a.Erasure.Equal(b.Erasure) {
@@ -73,9 +73,35 @@ func sameFileInfoVersion(a, b FileInfo) bool {
 	return true
 }
 
+// The undo capability controls rollback ownership, not the logical contents.
+// A partial no-op update can revoke it without changing a single public field.
+func sameVersionMetadata(a, b map[string]string) bool {
+	if a[rollbackIDKey] == b[rollbackIDKey] {
+		return maps.Equal(a, b)
+	}
+	for k, v := range a {
+		if k != rollbackIDKey {
+			if other, ok := b[k]; !ok || other != v {
+				return false
+			}
+		}
+	}
+	for k := range b {
+		if k != rollbackIDKey {
+			if _, ok := a[k]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Legacy callers without an undo capability must match the persisted state,
 // rather than transient coordinator-only fields in their original FileInfo.
 func samePersistedVersion(current, expected FileInfo) bool {
+	if current.Metadata[rollbackIDKey] != expected.Metadata[rollbackIDKey] {
+		return false
+	}
 	var meta xlMetaV2
 	if err := meta.AddVersion(expected); err != nil {
 		return false
