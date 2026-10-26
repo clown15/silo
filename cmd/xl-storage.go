@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	pathutil "path"
 	"path/filepath"
@@ -1101,7 +1100,6 @@ func (s *xlStorage) ListDir(ctx context.Context, origvolume, volume, dirPath str
 }
 
 func (s *xlStorage) deleteVersions(ctx context.Context, volume, path string, fis ...FileInfo) error {
-	defer s.lockMutations(pathJoin(volume, path))()
 	volumeDir, err := s.getVolDir(volume)
 	if err != nil {
 		return err
@@ -1310,10 +1308,11 @@ func (s *xlStorage) readAllData(ctx context.Context, volume, volumeDir string, f
 	})
 }
 
-func (s *xlStorage) moveToTrash(filePath string, recursive, immediatePurge bool) error {
-	// The caller must retain its mutation guard until this rename completes.
-	// Only purging the already detached unique trash directory is asynchronous.
-	return s.moveToTrashNoDeadline(filePath, recursive, immediatePurge)
+func (s *xlStorage) moveToTrash(filePath string, recursive, immediatePurge bool) (err error) {
+	w := xioutil.NewDeadlineWorker(globalDriveConfig.GetMaxTimeout())
+	return w.Run(func() (err error) {
+		return s.moveToTrashNoDeadline(filePath, recursive, immediatePurge)
+	})
 }
 
 // DeleteVersion - deletes FileInfo metadata for path at `xl.meta`. forceDelMarker
@@ -1325,8 +1324,6 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 			Immediate: false,
 		})
 	}
-
-	defer s.lockMutations(pathJoin(volume, path))()
 
 	volumeDir, err := s.getVolDir(volume)
 	if err != nil {
@@ -1348,7 +1345,7 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 		metaDataPoolPut(buf) // Never used, return it
 		if fi.Deleted && forceDelMarker {
 			// Create a new xl.meta with a delete marker in it
-			return s.writeMetadataNoLock(ctx, "", volume, path, fi)
+			return s.WriteMetadata(ctx, "", volume, path, fi)
 		}
 
 		s.RLock()
@@ -1382,10 +1379,6 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 	var xlMeta xlMetaV2
 	if err = xlMeta.LoadOrConvert(buf); err != nil {
 		return err
-	}
-
-	if opts.UndoWrite {
-		return s.undoWrite(ctx, volume, path, fi, opts, &xlMeta)
 	}
 
 	dataDir, err := xlMeta.DeleteVersion(fi)
@@ -1428,12 +1421,15 @@ func (s *xlStorage) DeleteVersion(ctx context.Context, volume, path string, fi F
 		return s.writeAllMeta(ctx, volume, pathJoin(path, xlStorageFormatFile), buf, true)
 	}
 
+	if opts.UndoWrite && opts.OldDataDir != "" {
+		return renameAll(pathJoin(filePath, opts.OldDataDir, xlStorageFormatFileBackup), pathJoin(filePath, xlStorageFormatFile), filePath)
+	}
+
 	return s.deleteFile(volumeDir, pathJoin(volumeDir, path, xlStorageFormatFile), true, false)
 }
 
 // Updates only metadata for a given version.
 func (s *xlStorage) UpdateMetadata(ctx context.Context, volume, path string, fi FileInfo, opts UpdateMetadataOpts) (err error) {
-	defer s.lockMutations(pathJoin(volume, path))()
 	if len(fi.Metadata) == 0 {
 		return errInvalidArgument
 	}
@@ -1482,16 +1478,6 @@ func (s *xlStorage) UpdateMetadata(ctx context.Context, volume, path string, fi 
 
 // WriteMetadata - writes FileInfo metadata for path at `xl.meta`
 func (s *xlStorage) WriteMetadata(ctx context.Context, origvolume, volume, path string, fi FileInfo) (err error) {
-	defer s.lockMutations(pathJoin(volume, path))()
-	return s.writeMetadataNoLock(ctx, origvolume, volume, path, fi)
-}
-
-func (s *xlStorage) writeMetadataNoLock(ctx context.Context, origvolume, volume, path string, fi FileInfo) (err error) {
-	// Any later write of this version revokes the original writer's undo.
-	if _, ok := fi.Metadata[rollbackIDKey]; ok {
-		fi.Metadata = maps.Clone(fi.Metadata)
-		delete(fi.Metadata, rollbackIDKey)
-	}
 	if fi.Fresh {
 		if origvolume != "" {
 			origvolumeDir, err := s.getVolDir(origvolume)
@@ -2554,10 +2540,7 @@ func (s *xlStorage) DeleteBulk(ctx context.Context, volume string, paths ...stri
 			return err
 		}
 
-		unlock := s.lockMutations(pathJoin(volume, fp), pathJoin(volume, pathutil.Dir(fp)))
-		err = s.moveToTrash(filePath, false, false)
-		unlock()
-		if err != nil {
+		if err = s.moveToTrash(filePath, false, false); err != nil {
 			return err
 		}
 	}
@@ -2567,7 +2550,6 @@ func (s *xlStorage) DeleteBulk(ctx context.Context, volume string, paths ...stri
 
 // Delete - delete a file at path.
 func (s *xlStorage) Delete(ctx context.Context, volume string, path string, deleteOpts DeleteOptions) (err error) {
-	defer s.lockMutations(pathJoin(volume, path), pathJoin(volume, pathutil.Dir(path)))()
 	volumeDir, err := s.getVolDir(volume)
 	if err != nil {
 		return err
@@ -2597,7 +2579,6 @@ func skipAccessChecks(volume string) (ok bool) {
 
 // RenameData - rename source path to destination path atomically, metadata and data directory.
 func (s *xlStorage) RenameData(ctx context.Context, srcVolume, srcPath string, fi FileInfo, dstVolume, dstPath string, opts RenameOptions) (res RenameDataResp, err error) {
-	defer s.lockMutations(pathJoin(srcVolume, srcPath), pathJoin(dstVolume, dstPath))()
 	defer func() {
 		ignoredErrs := []error{
 			errFileNotFound,
@@ -2840,12 +2821,6 @@ func (s *xlStorage) RenameData(ctx context.Context, srcVolume, srcPath string, f
 			} else {
 				xlMeta.data.remove(reqVID, dataDir)
 			}
-		}
-		if !healing && res.OldDataDir == "" {
-			// Shared data must survive both commit and rollback. Keep the
-			// previous metadata in a separate transaction directory instead
-			// of using a data directory still owned by another version.
-			res.OldDataDir = fi.DataDir + "-rollback"
 		}
 	}
 
@@ -3299,7 +3274,6 @@ func (s *xlStorage) CleanAbandonedData(ctx context.Context, volume string, path 
 	if volume == "" || path == "" {
 		return nil // Ignore
 	}
-	defer s.lockMutations(pathJoin(volume, path))()
 
 	volumeDir, err := s.getVolDir(volume)
 	if err != nil {
@@ -3351,14 +3325,6 @@ func (s *xlStorage) CleanAbandonedData(ctx context.Context, volume string, path 
 	// Do not abort on context errors.
 	for dir := range foundDirs {
 		toRemove := pathJoin(volumeDir, path, dir+SlashSeparator)
-		// A completed disk mutation may still be awaiting its quorum result.
-		// Its previous generation is needed if that transaction must undo.
-		// Only commit/undo cleanup owns a directory containing this backup.
-		if _, err := Lstat(pathJoin(toRemove, xlStorageFormatFileBackup)); err == nil {
-			continue
-		} else if !osIsNotExist(err) {
-			return osErrToFileErr(err)
-		}
 		err = s.deleteFile(volumeDir, toRemove, true, true)
 		diskHealthCheckOK(ctx, err)
 		if err != nil {

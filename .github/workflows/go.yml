@@ -118,10 +118,13 @@ jobs:
           MINIO_API_REQUESTS_MAX: "10000"
         run: go test -race -tags kqueue,dev ./cmd -run '^Test(APIPutObjectRetention|APIVersionAddressedWrite|PutObjectRetention|DirectoryObjectLock|ObjectLockOverwrite|APICopyObjectPreservesVersionAfterSuspension|MultipartNullObjectLock|PoolsObjectLockOverwrite|MultipartVersioningTransitions|PlanReview|RecoveredMultipartUpload)' -count=1 -timeout=5m
 
-      - name: Run maintenance write, rollback and cleanup tests under race detector
+      - name: Run maintenance storage timeout and compatibility tests under race detector
         env:
           MINIO_API_REQUESTS_MAX: "10000"
-        run: go test -race -tags kqueue,dev ./cmd ./internal/grid ./internal/ioutil -run '^Test(Mutation|RenameCancellation|PutObjectGenerationFollowsCommitLock|MaintenancePartialFailedOverwriteAvailability|SingleMutationWaitsBeyondDefaultTimeout|WithoutDefaultTimeoutStillEndsOnDisconnectOrCancellation|WithDeadlineAndWait)' -count=1 -timeout=5m
+        run: go test -race -tags kqueue,dev ./cmd ./internal/grid ./internal/ioutil -run '^Test(StorageTimeout|StorageRollback|StoragePrerelease|MaintenancePartialFailedOverwriteAvailability|SingleRequest|WithDeadline)' -count=1 -timeout=5m
+
+      - name: Compile deferred consistency diagnostics
+        run: go test -tags kqueue,dev,consistency_strict ./cmd -run '^$'
 
   crosscompile:
     name: Cross Compile

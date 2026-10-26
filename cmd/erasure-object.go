@@ -1094,19 +1094,11 @@ func (er erasureObjects) getObjectInfoAndQuorum(ctx context.Context, bucket, obj
 
 // Similar to rename but renames data from srcEntry to dstEntry at dataDir
 func renameData(ctx context.Context, disks []StorageAPI, srcBucket, srcEntry string, metadata []FileInfo, dstBucket, dstEntry string, writeQuorum int) ([]StorageAPI, []byte, string, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, "", err
-	}
-	// Admission is cancelable. After admission use actual disk results for
-	// commit/rollback, even if the client or namespace lease is canceled.
-	ctx = context.WithoutCancel(ctx)
 	g := errgroup.WithNErrs(len(disks))
 
 	fvID := mustGetUUID()
 	for index := range disks {
-		metadata[index].Metadata = maps.Clone(metadata[index].Metadata)
 		metadata[index].SetTierFreeVersionID(fvID)
-		metadata[index].Metadata[rollbackIDKey] = fvID
 	}
 
 	diskVersions := make([][]byte, len(disks))
@@ -1564,18 +1556,6 @@ func (er erasureObjects) putObject(ctx context.Context, bucket string, object st
 		compIndex = opts.IndexCB()
 	}
 
-	if !opts.NoLock {
-		lk := er.NewNSLock(bucket, object)
-		lkctx, err := lk.GetLock(ctx, globalOperationTimeout)
-		if err != nil {
-			return ObjectInfo{}, err
-		}
-		ctx = lkctx.Context()
-		defer lk.Unlock(lkctx)
-	}
-
-	// Mint the generation while holding the commit lock. Staged uploads may
-	// acquire the lock in a different order from their encoding completion.
 	modTime := opts.MTime
 	if opts.MTime.IsZero() {
 		modTime = UTCNow()
@@ -1670,6 +1650,16 @@ func (er erasureObjects) putObject(ctx context.Context, bucket string, object st
 		if opts.DataMovement {
 			partsMetadata[index].SetDataMov()
 		}
+	}
+
+	if !opts.NoLock {
+		lk := er.NewNSLock(bucket, object)
+		lkctx, err := lk.GetLock(ctx, globalOperationTimeout)
+		if err != nil {
+			return ObjectInfo{}, err
+		}
+		ctx = lkctx.Context()
+		defer lk.Unlock(lkctx)
 	}
 
 	if !opts.ReplicationRequest && !opts.ReplicaLockReconcile && !opts.DataMovement &&

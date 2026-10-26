@@ -26,8 +26,7 @@ func (d compatibilityFailedOverwrite) RenameData(ctx context.Context, sv, sp str
 	return RenameDataResp{}, errDiskNotFound
 }
 
-// Maintenance compatibility requirement: after a completely joined failed
-// overwrite with one residue, keep the previously acknowledged quorum readable.
+// Maintenance compatibility requirement: after a failed overwrite with one residue, keep the previously acknowledged quorum readable.
 // This tests a known history; it does not claim the resulting snapshot proves it.
 func TestMaintenancePartialFailedOverwriteAvailability(t *testing.T) {
 	// Lock RPC tests configure a single-drive backend (EC:0). Pin this

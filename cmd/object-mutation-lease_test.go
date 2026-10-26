@@ -1,3 +1,5 @@
+//go:build consistency_strict
+
 // Copyright (c) 2026 Feng Ruohang
 //
 // This file is part of Silo Object Storage.

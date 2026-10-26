@@ -127,17 +127,6 @@ var deadlineWorkPanics atomic.Int64
 // If the deadline/context passes before the function finishes executing,
 // the zero value and the context error is returned.
 func WithDeadline[V any](ctx context.Context, timeout time.Duration, work func(ctx context.Context) (result V, err error)) (result V, err error) {
-	return withDeadline(ctx, timeout, work, false)
-}
-
-// WithDeadlineAndWait cancels work at the deadline, but waits for it to finish
-// and returns its actual result. Use it for mutations whose caller must not
-// release a lock or start cleanup while the work can still change storage.
-func WithDeadlineAndWait[V any](ctx context.Context, timeout time.Duration, work func(ctx context.Context) (result V, err error)) (result V, err error) {
-	return withDeadline(ctx, timeout, work, true)
-}
-
-func withDeadline[V any](ctx context.Context, timeout time.Duration, work func(ctx context.Context) (result V, err error), wait bool) (result V, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -174,10 +163,6 @@ func withDeadline[V any](ctx context.Context, timeout time.Duration, work func(c
 	case v := <-c:
 		return v.val, v.err
 	case <-ctx.Done():
-		if wait {
-			v := <-c
-			return v.val, v.err
-		}
 		var zero V
 		return zero, ctx.Err()
 	}

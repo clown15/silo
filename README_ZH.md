@@ -43,11 +43,11 @@
 
 升级前请阅读[发行说明](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-18T00-00-00Z)，特别是 strict 分片列表的移除、服务端协调升级要求与实测性能成本。代码、问题报告和文档贡献者见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
 
-20261025 源码正在准备 Draft Release：使用 Go 1.27.3、silo-pkg v3.15.1、
-已发布的 mcli 20261025、Console v2.5.0（`989fa7150792`）与上游 minio-go
-`ab93db7ba435`。其中包含 Console **Reset to default（恢复默认）** 所需的
-Server IAM 缓存修复，以及限定范围的写入、回滚与清理修复。
-请阅读[变更与仍存的存储限制](CHANGELOG.md#release2026-10-25t00-00-00z)；
+20261026 维护版本正在准备中：使用 Go 1.27.3、silo-pkg v3.15.2、
+mcli 20261026、Console v2.5.1（`6a05e8d6ad67`）与上游 minio-go
+`320af050c445`。其中包含 Console **Reset to default（恢复默认）** 所需的
+Server IAM 缓存修复，以及远端回滚参数透传修复；保持既有存储超时与取消行为。
+请阅读[变更与仍存的存储限制](CHANGELOG.md#release2026-10-26t00-00-00z)；
 上述已发布制品仍保留原有组件版本。
 
 ## 概述

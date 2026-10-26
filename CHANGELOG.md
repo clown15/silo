@@ -1,9 +1,9 @@
 # Changelog
 
-## RELEASE.2026-10-25T00-00-00Z
+## RELEASE.2026-10-26T00-00-00Z
 
-Package version: `20261025000000.0.0`. This source is prepared for a Draft
-Release; public Server artifacts and images remain at 20261018 until promotion.
+Package version: `20261026000000.0.0`. Publication status and artifacts are
+listed in [GitHub Releases](https://github.com/pgsty/silo/releases).
 
 - Fix LDAP login for long normalized DNs without hiding unreadable IAM
   revocation records. Only length errors for valid keys with an ASCII path
@@ -11,13 +11,17 @@ Release; public Server artifacts and images remain at 20261018 until promotion.
   Thanks to [@910patin](https://github.com/910patin) for the original fix and
   reproduction in [#250](https://github.com/pgsty/silo/pull/250).
 - Build the server and standalone debugging tools with Go 1.27.3 and refresh
-  Go dependencies, including silo-pkg v3.15.1, the published mcli 20261025
-  source and upstream minio-go `ab93db7ba435` for multipart, read/seek and
-  batch-delete fixes. Retain output-format and NetBSD compatibility selections.
-- Embed the published Console v2.5.0 source `989fa7150792`, including its
-  GUI update, diagnostic WebSocket closing handshake and complete health-report
-  decoding. Bundle published mcli 20261025 in container builds and select it
-  for the verified client installer and Helm client jobs.
+  Go dependencies, including silo-pkg v3.15.2, mcli 20261026
+  and upstream minio-go `320af050c445` for multipart, read/seek,
+  batch-delete and bucket-replication removal fixes. Retain output-format and NetBSD compatibility selections.
+- Embed Console v2.5.1 source `6a05e8d6ad67`, including its GUI update,
+  diagnostic WebSocket closing handshake, complete health-report decoding,
+  group-membership preservation, OIDC group permissions, TLS-proxy session
+  cookies, credential exports and accessibility fixes.
+- Bundle mcli 20261026 in container builds, the verified client installer and
+  Helm client jobs. Include client identity isolation, resync status and rate
+  fixes, and bounded batch-status fallback. Scripts must handle the additive
+  batch `pending` state and nonzero exits for partial resync mutations.
 - Read current bucket inventory in account-info responses so Console refreshes
   immediately reflect successful creation and deletion. This management endpoint
   now performs a live list instead of returning a cached inventory.
@@ -39,24 +43,20 @@ Release; public Server artifacts and images remain at 20261018 until promotion.
   and multi-pool deletion contributions.
 - Preserve Kafka's default broker protocol 2.1 and terminal-width behavior;
   fix legacy DARE v1 key unsealing and verify DARE v1/v2 and MinKMS TLS compatibility.
-- Wait for admitted storage mutations to finish before releasing local guards,
-  deciding rollback or cleaning staging data. Rollback verifies ownership and
-  restores only its overwritten version, preserving later writes and metadata
-  edits. Abandoned-data cleanup retains backups still needed by commit/undo.
-  Generate PUT timestamps under the commit lock. Keep the prior read-quorum
-  and healing policy, including readability after a failed partial overwrite.
+- Forward storage RPC delete options, including the previous data directory
+  needed by overwrite rollback. Preserve existing drive/RPC timeouts, request
+  cancellation, object locking, read-quorum and healing behavior.
 - Update bundled curl to 8.23.0 and require patched static libraries. Apply
   [Red Hat's compromised-CA mitigation](https://access.redhat.com/security/vulnerabilities/RHSB-2026-012);
   the root blocklist also rejects legitimate chains under the affected roots.
 - Ship Windows platform archives as ZIP; Linux and macOS retain tar.gz.
 
-Storage limits remain: this does not provide distributed fencing after lease
-loss or network partition, eliminate stale reads after partial metadata writes,
-or repair previously inconsistent objects. Stricter read refusal and additional
-cross-pool recovery remain deferred; their diagnostic tests are retained under
-`consistency_strict`. Waiting for admitted I/O can extend same-object waits on
-a stuck drive, and interrupted cleanup can retain rollback backups. Upgrade all
-writers before relying on the new rollback ownership checks.
+Storage timeouts retain their existing meaning: a returned timeout does not
+prove that the underlying disk operation stopped or that a write did not
+commit. Late commits or delayed rollback can affect newer writes; stale reads
+remain possible after partial failures, lease loss or network partitions. This
+release does not provide distributed fencing or repair previously inconsistent
+objects.
 
 These source changes are not included in the published 20261018 artifacts.
 

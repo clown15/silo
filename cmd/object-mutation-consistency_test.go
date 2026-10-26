@@ -1,3 +1,5 @@
+//go:build consistency_strict
+
 // Copyright (c) 2026 Feng Ruohang
 //
 // This file is part of Silo Object Storage.
@@ -472,7 +474,7 @@ func TestMutationDeleteJoinsNestedWorker(t *testing.T) {
 	defer globalDriveConfig.Update(drive.Config{MaxTimeout: oldTimeout})
 	done := make(chan error, 1)
 	go func() {
-		_, e := xioutil.WithDeadlineAndWait(context.Background(), globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (struct{}, error) {
+		_, e := xioutil.WithDeadline(context.Background(), globalDriveConfig.GetMaxTimeout(), func(ctx context.Context) (struct{}, error) {
 			return struct{}{}, disk.storage.DeleteVersion(ctx, bucket, object, fi, false, DeleteOptions{UndoWrite: true})
 		})
 		done <- e

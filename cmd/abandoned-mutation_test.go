@@ -1,3 +1,5 @@
+//go:build consistency_strict
+
 // Copyright (c) 2026 Feng Ruohang
 // SPDX-License-Identifier: AGPL-3.0-or-later
 

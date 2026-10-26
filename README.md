@@ -43,11 +43,11 @@ This release strengthens Object Lock and IAM authorization, makes scoped STS rev
 
 Read the [release notes](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-18T00-00-00Z) before upgrading, especially the removal of strict multipart listing, coordinated server upgrades, and measured performance costs. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the people behind the code, reports, and documentation.
 
-The 20261025 source is prepared for a Draft Release with Go 1.27.3,
-silo-pkg v3.15.1, released mcli 20261025, Console v2.5.0 (`989fa7150792`),
-and upstream minio-go `ab93db7ba435`. It includes the Server IAM cache repair
-needed by Console's **Reset to default** action and bounded write/rollback/cleanup
-repairs. Read the [changes and remaining storage limits](CHANGELOG.md#release2026-10-25t00-00-00z).
+The 20261026 maintenance release is in preparation with Go 1.27.3,
+silo-pkg v3.15.2, mcli 20261026, Console v2.5.1 (`6a05e8d6ad67`),
+and upstream minio-go `320af050c445`. It includes the Server IAM cache repair
+needed by Console's **Reset to default** action and remote rollback-option propagation, preserving existing storage
+timeouts and cancellation behavior. Read the [changes and remaining storage limits](CHANGELOG.md#release2026-10-26t00-00-00z).
 The published artifacts above retain their original component versions.
 
 ## Overview

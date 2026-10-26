@@ -399,7 +399,10 @@ func getCompleteMultipartMD5(parts []CompletePart) string {
 	return s3MD5
 }
 
-// Clean unwanted fields from metadata
+// Keep metadata written by pre-release builds out of public object metadata.
+const rollbackIDKey = ReservedMetadataPrefixLower + "rollback-id"
+
+// Clean unwanted fields from metadata.
 func cleanMetadata(metadata map[string]string) map[string]string {
 	// Remove STANDARD StorageClass
 	metadata = removeStandardStorageClass(metadata)

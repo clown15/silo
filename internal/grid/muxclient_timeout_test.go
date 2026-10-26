@@ -25,67 +25,43 @@ import (
 	"time"
 )
 
-func TestSingleMutationWaitsBeyondDefaultTimeout(t *testing.T) {
-	for _, admitted := range []bool{false, true} {
-		t.Run(map[bool]string{false: "ordinary", true: "admitted"}[admitted], func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				ctx := t.Context()
-				if admitted {
-					ctx = WithoutDefaultTimeout(ctx)
-				}
-				conn := &Connection{outQueue: make(chan []byte, 1)}
-				client := newMuxClient(ctx, 1, conn)
-				defer client.cancelFn(context.Canceled)
-				done := make(chan Response, 1)
-				go func() {
-					msg, err := client.roundtrip(handlerTest, nil)
-					done <- Response{Msg: msg, Err: err}
-				}()
-				wire := <-conn.outQueue
-				var request message
-				if _, err := request.UnmarshalMsg(wire); err != nil {
-					t.Fatal(err)
-				}
-				PutByteBuffer(wire)
-				if admitted && request.DeadlineMS != 0 {
-					t.Errorf("admitted mutation tells the server to discard a late result after %dms", request.DeadlineMS)
-				}
-				time.Sleep(defaultSingleRequestTimeout + time.Second)
-				synctest.Wait()
-				if !admitted {
-					select {
-					case got := <-done:
-						if !errors.Is(got.Err, context.DeadlineExceeded) {
-							t.Fatalf("ordinary timeout: %v", got.Err)
-						}
-					default:
-						t.Fatal("ordinary request lost its default timeout")
-					}
-					return
-				}
-				select {
-				case got := <-done:
-					t.Fatalf("mutation returned before its commit completed: %v", got.Err)
-				default:
-				}
-				client.response(0, Response{Msg: []byte("committed")})
-				got := <-done
-				if got.Err != nil || string(got.Msg) != "committed" {
-					t.Fatalf("lost late commit result: %q, %v", got.Msg, got.Err)
-				}
-			})
-		})
-	}
+func TestSingleRequestDefaultTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn := &Connection{outQueue: make(chan []byte, 1)}
+		client := newMuxClient(t.Context(), 1, conn)
+		defer client.cancelFn(context.Canceled)
+		done := make(chan error, 1)
+		go func() { _, err := client.roundtrip(handlerTest, nil); done <- err }()
+		wire := <-conn.outQueue
+		var request message
+		if _, err := request.UnmarshalMsg(wire); err != nil {
+			t.Fatal(err)
+		}
+		PutByteBuffer(wire)
+		if request.DeadlineMS != uint32(defaultSingleRequestTimeout/time.Millisecond) {
+			t.Fatalf("wire deadline: %d", request.DeadlineMS)
+		}
+		time.Sleep(defaultSingleRequestTimeout + time.Second)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("request outlived the default timeout")
+		}
+	})
 }
 
-func TestWithoutDefaultTimeoutStillEndsOnDisconnectOrCancellation(t *testing.T) {
+func TestSingleRequestCancellationAndDisconnect(t *testing.T) {
 	for _, disconnect := range []bool{false, true} {
 		t.Run(map[bool]string{false: "explicit-cancel", true: "disconnect"}[disconnect], func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				conn := &Connection{outQueue: make(chan []byte, 1)}
-				client := newMuxClient(WithoutDefaultTimeout(ctx), 1, conn)
+				client := newMuxClient(ctx, 1, conn)
 				defer client.cancelFn(context.Canceled)
 				done := make(chan error, 1)
 				go func() {

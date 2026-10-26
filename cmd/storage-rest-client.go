@@ -408,11 +408,8 @@ func (client *storageRESTClient) CreateFile(ctx context.Context, origvolume, vol
 }
 
 func (client *storageRESTClient) WriteMetadata(ctx context.Context, origvolume, volume, path string, fi FileInfo) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	// As with RenameData, admitted metadata writes must finish before unlock.
-	ctx = grid.WithoutDefaultTimeout(context.WithoutCancel(ctx))
+	ctx, cancel := context.WithTimeout(ctx, globalDriveConfig.GetMaxTimeout())
+	defer cancel()
 
 	_, err := storageWriteMetadataRPC.Call(ctx, client.gridConn, &MetadataHandlerParams{
 		DiskID:     *client.diskID.Load(),
@@ -425,10 +422,8 @@ func (client *storageRESTClient) WriteMetadata(ctx context.Context, origvolume, 
 }
 
 func (client *storageRESTClient) UpdateMetadata(ctx context.Context, volume, path string, fi FileInfo, opts UpdateMetadataOpts) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	ctx = grid.WithoutDefaultTimeout(context.WithoutCancel(ctx))
+	ctx, cancel := context.WithTimeout(ctx, globalDriveConfig.GetMaxTimeout())
+	defer cancel()
 
 	_, err := storageUpdateMetadataRPC.Call(ctx, client.gridConn, &MetadataHandlerParams{
 		DiskID:     *client.diskID.Load(),
@@ -441,14 +436,8 @@ func (client *storageRESTClient) UpdateMetadata(ctx context.Context, volume, pat
 }
 
 func (client *storageRESTClient) DeleteVersion(ctx context.Context, volume, path string, fi FileInfo, forceDelMarker bool, opts DeleteOptions) (err error) {
-	if opts.UndoWrite {
-		// Rollback is part of the commit and must finish before unlocking.
-		ctx = grid.WithoutDefaultTimeout(context.WithoutCancel(ctx))
-	} else {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, globalDriveConfig.GetMaxTimeout())
-		defer cancel()
-	}
+	ctx, cancel := context.WithTimeout(ctx, globalDriveConfig.GetMaxTimeout())
+	defer cancel()
 
 	_, err = storageDeleteVersionRPC.Call(ctx, client.gridConn, &DeleteVersionHandlerParams{
 		DiskID:         *client.diskID.Load(),
@@ -498,13 +487,6 @@ func (client *storageRESTClient) CheckParts(ctx context.Context, volume string, 
 func (client *storageRESTClient) RenameData(ctx context.Context, srcVolume, srcPath string, fi FileInfo,
 	dstVolume, dstPath string, opts RenameOptions,
 ) (res RenameDataResp, err error) {
-	if err := ctx.Err(); err != nil {
-		return res, err
-	}
-	// The remote handler cannot cancel an admitted RenameData. Keep waiting
-	// for its result so renameData can roll back every completed mutation
-	// before the caller cleans staging files and releases the namespace lock.
-	ctx = grid.WithoutDefaultTimeout(context.WithoutCancel(ctx))
 	params := RenameDataHandlerParams{
 		DiskID:    *client.diskID.Load(),
 		SrcVolume: srcVolume,
