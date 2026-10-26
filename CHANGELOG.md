@@ -14,7 +14,7 @@ listed in [GitHub Releases](https://github.com/pgsty/silo/releases).
   Go dependencies, including silo-pkg v3.15.2, mcli 20261026
   and upstream minio-go `320af050c445` for multipart, read/seek,
   batch-delete and bucket-replication removal fixes. Retain output-format and NetBSD compatibility selections.
-- Embed Console v2.5.1 source `6a05e8d6ad67`, including its GUI update,
+- Embed Console v2.5.1 source `fff1618d9abb`, including its GUI update,
   diagnostic WebSocket closing handshake, complete health-report decoding,
   group-membership preservation, OIDC group permissions, TLS-proxy session
   cookies, credential exports and accessibility fixes.
