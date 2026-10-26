@@ -17,36 +17,59 @@ import (
 // mutation of the same version revokes it, including a no-op metadata update.
 const rollbackIDKey = ReservedMetadataPrefixLower + "rollback-id"
 
-// Bound memory independently of object count. Include the physical drive so
-// shards of one object are not serialized across drives. Multiple paths are
-// locked in slot order, including collisions, to avoid lock inversion.
-var storageMutationLocks [65536]sync.Mutex
+type storageMutationKey struct {
+	drive, path string
+}
+
+type storageMutationLock struct {
+	mu   sync.Mutex
+	refs int // Holders and waiters; protected by the registry mutex.
+}
+
+// Keep exact resource locks only while they have holders or waiters. The
+// registry mutex protects references, never storage I/O or resource waits.
+var storageMutationLocks = struct {
+	sync.Mutex
+	locks map[storageMutationKey]*storageMutationLock
+}{locks: make(map[storageMutationKey]*storageMutationLock)}
 
 func (s *xlStorage) lockMutations(paths ...string) func() {
-	var slots [4]int
-	n := 0
-	for _, path := range paths {
-		h := uint64(14695981039346656037)
-		for _, part := range []string{s.drivePath, path} {
-			for i := range part {
-				h = (h ^ uint64(part[i])) * 1099511628211
-			}
-			h *= 1099511628211
+	// Each call uses one drive. Sorting its unique paths gives all overlapping
+	// calls the same acquisition order without changing the caller's slice.
+	paths = slices.Clone(paths)
+	slices.Sort(paths)
+	paths = slices.Compact(paths)
+	drive := s.drivePath
+	locks := make([]*storageMutationLock, len(paths))
+	// Retain every entry before waiting so unlock cannot remove a mutex that
+	// a queued operation still needs.
+	storageMutationLocks.Lock()
+	for i, path := range paths {
+		key := storageMutationKey{drive, path}
+		lock := storageMutationLocks.locks[key]
+		if lock == nil {
+			lock = &storageMutationLock{}
+			storageMutationLocks.locks[key] = lock
 		}
-		slot := int(h % uint64(len(storageMutationLocks)))
-		if !slices.Contains(slots[:n], slot) {
-			slots[n] = slot
-			n++
-		}
+		lock.refs++
+		locks[i] = lock
 	}
-	slices.Sort(slots[:n])
-	for _, slot := range slots[:n] {
-		storageMutationLocks[slot].Lock()
+	storageMutationLocks.Unlock()
+	for _, lock := range locks {
+		lock.mu.Lock()
 	}
 	return func() {
-		for i := n - 1; i >= 0; i-- {
-			storageMutationLocks[slots[i]].Unlock()
+		for i := len(locks) - 1; i >= 0; i-- {
+			locks[i].mu.Unlock()
 		}
+		storageMutationLocks.Lock()
+		for i, path := range paths {
+			locks[i].refs--
+			if locks[i].refs == 0 {
+				delete(storageMutationLocks.locks, storageMutationKey{drive, path})
+			}
+		}
+		storageMutationLocks.Unlock()
 	}
 }
 
