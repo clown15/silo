@@ -2,8 +2,11 @@
 
 ## RELEASE.2026-10-26T00-00-00Z
 
-Package version: `20261026000000.0.0`. Publication status and artifacts are
-listed in [GitHub Releases](https://github.com/pgsty/silo/releases).
+Package version: `20261026000000.0.0`; published from source `c3ad836aed0d`.
+Artifacts are listed in the [GitHub release](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-26T00-00-00Z).
+The coordinated [English release notes](https://silo.pgsty.com/blog/release/silo-20261026/)
+and [Chinese release notes](https://silo.pgsty.com/zh/blog/release/silo-20261026/)
+cover all components, upgrade guidance, and validation scope.
 
 - Fix LDAP login for long normalized DNs without hiding unreadable IAM
   revocation records. Only length errors for valid keys with an ASCII path

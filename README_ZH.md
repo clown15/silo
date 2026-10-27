@@ -24,7 +24,7 @@
 <p align="center">
   <a href="https://silo.pgsty.com/zh/"><img alt="官网" src="https://img.shields.io/badge/%E5%AE%98%E7%BD%91-silo.pgsty.com%2Fzh-1d588c"></a>
   <a href="https://github.com/pgsty/silo/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/pgsty/silo?include_prereleases&label=release&logo=github"></a>
-  <a href="https://hub.docker.com/r/pgsty/silo"><img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/pgsty/minio?logo=docker"></a>
+  <a href="https://hub.docker.com/r/pgsty/silo"><img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/pgsty/silo?logo=docker"></a>
   <a href="go.mod"><img alt="Go Version" src="https://img.shields.io/github/go-mod/go-version/pgsty/silo?logo=go"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-AGPLv3-blue"></a>
 </p>
@@ -35,20 +35,13 @@
 > [!NOTE]
 > 2026-08-06，本仓库由 `pgsty/minio` 更名为 `pgsty/silo`，默认分支由 `master` 更名为 `main`。以原 MinIO 形态维持的归档构件仍位于归档的 [`minio`](https://github.com/pgsty/silo/tree/minio) 分支，以及截止 [`RELEASE.2026-08-04T00-00-00Z`](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-08-04T00-00-00Z) 的历次发布中。
 
-## SILO 20261018000000
+## SILO 20261026000000
 
-[SILO 20261018000000](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-18T00-00-00Z) 已正式发布，提供各平台归档包、Linux 软件包，以及 amd64／arm64 标准版和 distroless Docker 镜像。版本标签为 `RELEASE.2026-10-18T00-00-00Z`，包版本为 `20261018000000.0.0`。
+[SILO 20261026000000](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-26T00-00-00Z) 已正式发布，提供各平台归档包、Linux 软件包，以及 amd64／arm64 标准版和 distroless Docker 镜像。版本标签为 `RELEASE.2026-10-26T00-00-00Z`，包版本为 `20261026000000.0.0`，构建源码为 `c3ad836aed0d`。
 
-本版加强 Object Lock 与 IAM 鉴权，实现跨进程和站点的持久 STS 撤销，保护多池迁移中的并发更新，并改进 LIST 恢复、分片清理与 S3 错误处理。内置 Console v2.4.2、silo-pkg v3.14.3，使用 Go 1.27.2 构建，配套管理客户端为 mcli 20261018。
+本版修复 LDAP 长 DN 登录、IAM 策略刷新、多池删除安全、分层对象过期、分片复制校验和及远端回滚参数透传。内置 Console v2.5.1（`fff1618d9abb`），使用 silo-pkg v3.15.2、Go 1.27.3 与上游 minio-go `v7.4.2-0.20261025165926-320af050c445`。配套管理客户端为 mcli 20261026，容器镜像内置该版本的 `mcli`。
 
-升级前请阅读[发行说明](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-18T00-00-00Z)，特别是 strict 分片列表的移除、服务端协调升级要求与实测性能成本。代码、问题报告和文档贡献者见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
-
-20261026 维护版本正在准备中：使用 Go 1.27.3、silo-pkg v3.15.2、
-mcli 20261026、Console v2.5.1（`fff1618d9abb`）与上游 minio-go
-`320af050c445`。其中包含 Console **Reset to default（恢复默认）** 所需的
-Server IAM 缓存修复，以及远端回滚参数透传修复；保持既有存储超时与取消行为。
-请阅读[变更与仍存的存储限制](CHANGELOG.md#release2026-10-26t00-00-00z)；
-上述已发布制品仍保留原有组件版本。
+Server IAM 缓存修复使 Console **Reset to default（恢复默认）** 操作即时生效。存储超时与取消行为保持既有语义：超时不代表底层磁盘操作已停止，也不代表写入未提交。升级前请阅读[联合发布说明](https://silo.pgsty.com/zh/blog/release/silo-20261026/)与[仍存的存储限制](CHANGELOG.md#release2026-10-26t00-00-00z)。代码、问题报告和文档贡献者见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
 
 ## 概述
 
@@ -69,7 +62,7 @@ docker run -d --name silo -p 9000:9000 -p 9001:9001 \
   -e MINIO_ROOT_USER=minioadmin \
   -e MINIO_ROOT_PASSWORD=change-me-long-password \
   -v "$PWD/data:/data" \
-  docker.io/pgsty/silo:RELEASE.2026-10-18T00-00-00Z server /data --console-address ":9001"
+  docker.io/pgsty/silo:RELEASE.2026-10-26T00-00-00Z server /data --console-address ":9001"
 ```
 
 <p align="center">

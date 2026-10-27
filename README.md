@@ -24,7 +24,7 @@
 <p align="center">
   <a href="https://silo.pgsty.com/"><img alt="Website" src="https://img.shields.io/badge/Website-silo.pgsty.com-1d588c"></a>
   <a href="https://github.com/pgsty/silo/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/pgsty/silo?include_prereleases&label=release&logo=github"></a>
-  <a href="https://hub.docker.com/r/pgsty/silo"><img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/pgsty/minio?logo=docker"></a>
+  <a href="https://hub.docker.com/r/pgsty/silo"><img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/pgsty/silo?logo=docker"></a>
   <a href="go.mod"><img alt="Go Version" src="https://img.shields.io/github/go-mod/go-version/pgsty/silo?logo=go"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-AGPLv3-blue"></a>
 </p>
@@ -35,20 +35,13 @@
 > [!NOTE]
 > Renamed from `pgsty/minio` to `pgsty/silo`, default branch `master` → `main`, on 2026-08-06. Artifacts under the original MinIO identity stay published on the archived [`minio`](https://github.com/pgsty/silo/tree/minio) branch and in releases up to [`RELEASE.2026-08-04T00-00-00Z`](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-08-04T00-00-00Z).
 
-## SILO 20261018000000
+## SILO 20261026000000
 
-[SILO 20261018000000](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-18T00-00-00Z) is available as platform archives, Linux packages, and standard or distroless Docker images for amd64 and arm64. The release tag is `RELEASE.2026-10-18T00-00-00Z`; the package version is `20261018000000.0.0`.
+[SILO 20261026000000](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-26T00-00-00Z) is available as platform archives, Linux packages, and standard or distroless Docker images for amd64 and arm64. The release tag is `RELEASE.2026-10-26T00-00-00Z`; the package version is `20261026000000.0.0`, built from source `c3ad836aed0d`.
 
-This release strengthens Object Lock and IAM authorization, makes scoped STS revocation durable across processes and sites, protects concurrent updates during pool migration, and improves LIST recovery, multipart cleanup, and S3 error handling. It includes Console v2.4.2 and silo-pkg v3.14.3, and is built with Go 1.27.2. Use mcli 20261018 for administration.
+This release fixes LDAP long-DN login, IAM policy refresh, multi-pool deletion safety, tiered-object expiry, multipart replication checksums, and remote rollback-option propagation. It embeds Console v2.5.1 (`fff1618d9abb`) and uses silo-pkg v3.15.2, Go 1.27.3, and upstream minio-go `v7.4.2-0.20261025165926-320af050c445`. Use mcli 20261026 for administration; the container images bundle it as `mcli`.
 
-Read the [release notes](https://github.com/pgsty/silo/releases/tag/RELEASE.2026-10-18T00-00-00Z) before upgrading, especially the removal of strict multipart listing, coordinated server upgrades, and measured performance costs. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the people behind the code, reports, and documentation.
-
-The 20261026 maintenance release is in preparation with Go 1.27.3,
-silo-pkg v3.15.2, mcli 20261026, Console v2.5.1 (`fff1618d9abb`),
-and upstream minio-go `320af050c445`. It includes the Server IAM cache repair
-needed by Console's **Reset to default** action and remote rollback-option propagation, preserving existing storage
-timeouts and cancellation behavior. Read the [changes and remaining storage limits](CHANGELOG.md#release2026-10-26t00-00-00z).
-The published artifacts above retain their original component versions.
+The Server IAM cache repair enables Console's **Reset to default** action. Existing storage timeouts and cancellation behavior remain: a timeout does not prove that a disk operation stopped or a write did not commit. Read the [coordinated release notes](https://silo.pgsty.com/blog/release/silo-20261026/) and [remaining storage limits](CHANGELOG.md#release2026-10-26t00-00-00z) before upgrading. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the people behind the code, reports, and documentation.
 
 ## Overview
 
@@ -69,7 +62,7 @@ docker run -d --name silo -p 9000:9000 -p 9001:9001 \
   -e MINIO_ROOT_USER=minioadmin \
   -e MINIO_ROOT_PASSWORD=change-me-long-password \
   -v "$PWD/data:/data" \
-  docker.io/pgsty/silo:RELEASE.2026-10-18T00-00-00Z server /data --console-address ":9001"
+  docker.io/pgsty/silo:RELEASE.2026-10-26T00-00-00Z server /data --console-address ":9001"
 ```
 
 <p align="center">
